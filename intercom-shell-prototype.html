@@ -1,0 +1,324 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Intercom Shell — Prototype (Console Panel)</title>
+<style>
+  :root {
+    --cream: #f4e8ce;
+    --paper: #fbf4e4;
+    --ink: #2b1d14;
+    --rust: #b6502f;
+    --teal: #2f6f6b;
+    --mustard: #e8a33d;
+    --red: #c1443a;
+    --green: #5c8a52;
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0;
+    font-family: 'Futura', 'Century Gothic', 'Trebuchet MS', sans-serif;
+    background:
+      radial-gradient(circle, rgba(43,29,20,0.06) 1px, transparent 1.2px) 0 0/14px 14px,
+      var(--cream);
+    color: var(--ink);
+    padding: 24px 16px 60px;
+  }
+  .note {
+    max-width: 1080px;
+    margin: 0 auto 16px;
+    font-size: 12px;
+    letter-spacing: 0.06em;
+    text-transform: uppercase;
+    color: var(--rust);
+    border: 2px dashed var(--rust);
+    background: var(--paper);
+    padding: 8px 12px;
+    border-radius: 8px;
+    text-align: center;
+  }
+  .window {
+    max-width: 1080px;
+    margin: 0 auto;
+    border: 4px solid var(--ink);
+    border-radius: 16px;
+    box-shadow: 8px 8px 0 var(--ink);
+    overflow: hidden;
+    background: var(--paper);
+  }
+  .titlebar {
+    background: var(--ink);
+    color: var(--paper);
+    display: flex; align-items: center; justify-content: space-between;
+    padding: 8px 14px;
+    font-weight: 800; text-transform: uppercase; letter-spacing: 0.08em; font-size: 13px;
+  }
+  .titlebar .dots { display: flex; gap: 6px; }
+  .titlebar .dots span { width: 12px; height: 12px; border-radius: 50%; background: var(--mustard); display: inline-block; }
+  .titlebar .dots span:nth-child(2) { background: var(--teal); }
+  .titlebar .dots span:nth-child(3) { background: var(--red); }
+  .content { padding: 20px; }
+  .comic-btn {
+    font-family: inherit; font-weight: 800; text-transform: uppercase; letter-spacing: 0.04em;
+    border: 3px solid var(--ink); border-radius: 10px; padding: 8px 14px; cursor: pointer;
+    background: var(--mustard); color: var(--ink); box-shadow: 3px 3px 0 var(--ink);
+  }
+  .comic-btn:active { transform: translate(2px,2px); box-shadow: 1px 1px 0 var(--ink); }
+  .comic-btn.green { background: var(--green); color: var(--paper); }
+  .comic-btn.red { background: var(--red); color: var(--paper); }
+  .comic-btn.teal { background: var(--teal); color: var(--paper); }
+  .comic-btn:disabled { opacity: 0.4; cursor: not-allowed; box-shadow: none; }
+
+  /* ============ Console Panel ============ */
+  .va-grid { display: grid; grid-template-columns: 190px 1fr 260px; gap: 16px; }
+  .va-rail {
+    background: var(--cream); border: 3px solid var(--ink); border-radius: 12px; padding: 12px;
+  }
+  .va-rail h3 { margin: 0 0 10px; font-size: 12px; text-transform: uppercase; letter-spacing: 0.06em; color: var(--rust); }
+  .va-slot {
+    display: flex; align-items: center; gap: 8px; background: var(--paper);
+    border: 2px solid var(--ink); border-radius: 8px; padding: 6px 8px; margin-bottom: 8px; font-size: 12px; font-weight: 700;
+  }
+  .va-lamp { width: 12px; height: 12px; border-radius: 50%; border: 2px solid var(--ink); background: #8c8172; flex-shrink: 0; }
+  .va-lamp.available { background: var(--green); }
+  .va-lamp.talking { background: var(--mustard); animation: pulse 1s infinite; }
+  .va-lamp.dnd { background: var(--red); }
+  @keyframes pulse { 50% { opacity: 0.4; } }
+  .va-center { display: flex; flex-direction: column; align-items: center; gap: 14px; }
+  .va-ptt {
+    width: 160px; height: 160px; border-radius: 50%;
+    background: radial-gradient(circle at 35% 30%, var(--rust), #8a3a1e);
+    border: 5px solid var(--ink); color: var(--paper); font-weight: 800; text-transform: uppercase;
+    display: flex; align-items: center; justify-content: center; text-align: center; font-size: 15px;
+    cursor: pointer; box-shadow: 5px 5px 0 var(--ink); letter-spacing: 0.04em;
+  }
+  .va-ptt:active, .va-ptt.on-air { background: radial-gradient(circle at 35% 30%, var(--mustard), var(--rust)); }
+  .va-rocker {
+    width: 120px; display: flex; border: 3px solid var(--ink); border-radius: 999px; overflow: hidden;
+  }
+  .va-rocker button {
+    flex: 1; font-family: inherit; font-weight: 800; font-size: 11px; padding: 8px 0; border: none; cursor: pointer;
+    background: var(--paper); text-transform: uppercase;
+  }
+  .va-rocker button.active { background: var(--teal); color: var(--paper); }
+  .va-sign {
+    border: 3px solid var(--ink); border-radius: 10px; padding: 8px 16px; font-weight: 800; text-transform: uppercase;
+    background: var(--green); color: var(--paper); cursor: pointer; letter-spacing: 0.05em; font-size: 12px;
+  }
+  .va-sign.dnd { background: var(--red); }
+  .va-tray { display: flex; gap: 10px; align-items: center; font-size: 11px; margin-top: 4px; flex-wrap: wrap; justify-content: center; }
+  .va-tray .icon { width: 14px; height: 14px; border-radius: 4px; border: 2px solid var(--ink); }
+  .va-chat { background: var(--cream); border: 3px solid var(--ink); border-radius: 12px; padding: 12px; display: flex; flex-direction: column; height: 100%; }
+  .va-chat h3 { margin: 0 0 10px; font-size: 12px; text-transform: uppercase; letter-spacing: 0.06em; color: var(--rust); }
+  .va-msg { background: var(--paper); border: 2px solid var(--ink); border-radius: 10px; padding: 6px 10px; font-size: 12px; margin-bottom: 8px; max-width: 90%; }
+  .va-msg.me { align-self: flex-end; background: var(--teal); color: var(--paper); }
+  .va-chat-input { display: flex; gap: 6px; margin-top: auto; }
+  .va-chat-input input { flex: 1; border: 2px solid var(--ink); border-radius: 8px; padding: 6px 8px; font-family: inherit; }
+
+  /* ---- Attention cards (small) ---- */
+  .va-cards-title { margin: 22px 0 10px; font-size: 12px; text-transform: uppercase; letter-spacing: 0.06em; color: var(--rust); }
+  .va-shelf { display: flex; gap: 14px; overflow-x: auto; padding: 16px 4px 10px; }
+  .va-card {
+    flex: 0 0 150px; height: 150px; background: var(--paper); border: 3px solid var(--ink); border-radius: 12px;
+    box-shadow: 4px 4px 0 rgba(43,29,20,0.35); padding: 10px; position: relative; transform: rotate(var(--tilt,0deg));
+    display: flex; flex-direction: column; align-items: center; justify-content: center; text-align: center;
+  }
+  .va-card:nth-child(1) { --tilt: -2deg; } .va-card:nth-child(2) { --tilt: 1.5deg; }
+  .va-card:nth-child(3) { --tilt: -1deg; } .va-card:nth-child(4) { --tilt: 2deg; }
+  .va-card .pin { position: absolute; top: -7px; left: 50%; transform: translateX(-50%); width: 13px; height: 13px; border-radius: 50%; background: var(--red); border: 2px solid var(--ink); }
+  .va-card .visual { font-size: 34px; margin-bottom: 4px; }
+  .va-card .purpose { font-weight: 800; font-size: 12px; margin-bottom: 2px; line-height: 1.15; }
+  .va-card .from { font-size: 10px; opacity: 0.7; margin-bottom: 8px; }
+  .va-card .comic-btn { padding: 3px 8px; font-size: 10px; box-shadow: 2px 2px 0 var(--ink); }
+  .va-card.acked { opacity: 0.5; }
+
+  /* ---- Composer ---- */
+  .composer {
+    margin-top: 18px; border: 3px solid var(--ink); border-radius: 12px; background: var(--cream); padding: 14px 16px;
+  }
+  .composer h3 { margin: 0 0 12px; font-size: 12px; text-transform: uppercase; letter-spacing: 0.06em; color: var(--rust); }
+  .composer-row { display: flex; gap: 14px; flex-wrap: wrap; }
+  .composer-field { flex: 1; min-width: 220px; }
+  .composer-field label { display: block; font-size: 10px; font-weight: 800; text-transform: uppercase; letter-spacing: 0.05em; margin-bottom: 6px; }
+  .composer select, .composer input[type=text] {
+    width: 100%; font-family: inherit; border: 2px solid var(--ink); border-radius: 8px; padding: 7px 8px; font-size: 13px; background: var(--paper);
+  }
+  .emoji-grid { display: flex; gap: 6px; flex-wrap: wrap; }
+  .emoji-opt {
+    width: 34px; height: 34px; border: 2px solid var(--ink); border-radius: 8px; background: var(--paper);
+    font-size: 17px; cursor: pointer; display: flex; align-items: center; justify-content: center;
+  }
+  .emoji-opt.selected { background: var(--mustard); box-shadow: 2px 2px 0 var(--ink); }
+  .composer-actions { display: flex; justify-content: flex-end; margin-top: 12px; }
+</style>
+</head>
+<body>
+
+  <div class="note">PROTOTYPE — comic intercom shell, issue #8. Console Panel, chosen over Comic Panel Grid and Radio Cabinet. Throwaway.</div>
+
+  <div class="window">
+    <div class="titlebar">
+      <span>📻 Intercom — Living Room</span>
+      <span class="dots"><span></span><span></span><span></span></span>
+    </div>
+    <div class="content">
+
+      <div class="va-grid">
+        <div class="va-rail">
+          <h3>Family</h3>
+          <div class="va-slot"><div class="va-lamp available"></div> Dad</div>
+          <div class="va-slot"><div class="va-lamp talking"></div> Mom</div>
+          <div class="va-slot"><div class="va-lamp dnd"></div> Sam (DND)</div>
+          <div class="va-slot"><div class="va-lamp available"></div> Grandma</div>
+        </div>
+        <div class="va-center">
+          <div class="va-ptt" id="va-ptt" onmousedown="vaTalk(true)" onmouseup="vaTalk(false)" onmouseleave="vaTalk(false)">Hold to Talk</div>
+          <div class="va-rocker">
+            <button class="active" onclick="vaHandsFree(this,false)">Off</button>
+            <button onclick="vaHandsFree(this,true)">Hands-Free</button>
+          </div>
+          <div class="va-sign" id="va-sign" onclick="vaToggleDnd()">Available</div>
+          <div class="va-tray">
+            <span class="icon" style="background:var(--green);"></span> tray: available
+            <span class="icon" style="background:var(--mustard);"></span> talking
+            <span class="icon" style="background:var(--red);"></span> DND
+          </div>
+        </div>
+        <div class="va-chat">
+          <h3>Chat</h3>
+          <div class="va-msg">Dinner's ready!</div>
+          <div class="va-msg me">On my way 👍</div>
+          <div class="va-chat-input">
+            <input type="text" placeholder="Message the family…">
+            <button class="comic-btn teal" style="padding:6px 10px;">Send</button>
+          </div>
+        </div>
+      </div>
+
+      <div class="va-cards-title">Attention Cards</div>
+      <div class="va-shelf" id="va-shelf">
+        <div class="va-card" id="va-card-1"><div class="pin"></div><div class="visual">🍽️</div><div class="purpose">Dinner's ready</div><div class="from">from Mom</div><button class="comic-btn green" onclick="vaAck('va-card-1')">Ack</button></div>
+        <div class="va-card" id="va-card-2"><div class="pin"></div><div class="visual">🚪</div><div class="purpose">Get the door?</div><div class="from">from Dad</div><button class="comic-btn green" onclick="vaAck('va-card-2')">Ack</button></div>
+        <div class="va-card" id="va-card-3"><div class="pin"></div><div class="visual">📦</div><div class="purpose">Package arrived</div><div class="from">from Sam</div><button class="comic-btn green" onclick="vaAck('va-card-3')">Ack</button></div>
+        <div class="va-card" id="va-card-4"><div class="pin"></div><div class="visual">☎️</div><div class="purpose">Call when free</div><div class="from">from Grandma</div><button class="comic-btn green" onclick="vaAck('va-card-4')">Ack</button></div>
+      </div>
+
+      <div class="composer">
+        <h3>Send an Attention Card</h3>
+        <div class="composer-row">
+          <div class="composer-field">
+            <label for="composer-preset">Purpose</label>
+            <select id="composer-preset" onchange="onPresetChange()">
+              <option value="Dinner's ready">Dinner's ready</option>
+              <option value="Get the door?">Get the door?</option>
+              <option value="Package arrived">Package arrived</option>
+              <option value="Call when free">Call when free</option>
+              <option value="Need a hand">Need a hand</option>
+              <option value="__custom__">Custom…</option>
+            </select>
+            <input type="text" id="composer-custom" placeholder="Type your own purpose…" style="display:none; margin-top:8px;">
+          </div>
+          <div class="composer-field">
+            <label>Send to</label>
+            <select id="composer-recipient">
+              <option>Dad</option>
+              <option>Mom</option>
+              <option>Sam</option>
+              <option>Grandma</option>
+            </select>
+          </div>
+        </div>
+        <div class="composer-row" style="margin-top:12px;">
+          <div class="composer-field">
+            <label>Icon</label>
+            <div class="emoji-grid" id="emoji-grid">
+              <button type="button" class="emoji-opt selected" onclick="pickEmoji(this,'🍽️')">🍽️</button>
+              <button type="button" class="emoji-opt" onclick="pickEmoji(this,'🚪')">🚪</button>
+              <button type="button" class="emoji-opt" onclick="pickEmoji(this,'📦')">📦</button>
+              <button type="button" class="emoji-opt" onclick="pickEmoji(this,'☎️')">☎️</button>
+              <button type="button" class="emoji-opt" onclick="pickEmoji(this,'❤️')">❤️</button>
+              <button type="button" class="emoji-opt" onclick="pickEmoji(this,'⏰')">⏰</button>
+              <button type="button" class="emoji-opt" onclick="pickEmoji(this,'🔥')">🔥</button>
+              <button type="button" class="emoji-opt" onclick="pickEmoji(this,'❓')">❓</button>
+              <button type="button" class="emoji-opt" onclick="pickEmoji(this,'🎉')">🎉</button>
+              <button type="button" class="emoji-opt" onclick="pickEmoji(this,'🛏️')">🛏️</button>
+            </div>
+          </div>
+        </div>
+        <div class="composer-actions">
+          <button class="comic-btn teal" onclick="sendAttentionCard()">Send Attention Card</button>
+        </div>
+      </div>
+
+    </div>
+  </div>
+
+<script>
+  function vaTalk(on) { document.getElementById('va-ptt').classList.toggle('on-air', on); }
+  function vaHandsFree(btn, on) {
+    document.querySelectorAll('.va-rocker button').forEach(b => b.classList.remove('active'));
+    btn.classList.add('active');
+    document.getElementById('va-ptt').classList.toggle('on-air', on);
+  }
+  function vaToggleDnd() {
+    const el = document.getElementById('va-sign');
+    const isDnd = el.classList.toggle('dnd');
+    el.textContent = isDnd ? 'Do Not Disturb' : 'Available';
+  }
+  function vaAck(id) { document.getElementById(id).classList.add('acked'); }
+
+  function onPresetChange() {
+    const preset = document.getElementById('composer-preset');
+    const custom = document.getElementById('composer-custom');
+    custom.style.display = preset.value === '__custom__' ? 'block' : 'none';
+  }
+
+  let selectedEmoji = '🍽️';
+  function pickEmoji(btn, emoji) {
+    document.querySelectorAll('.emoji-opt').forEach(b => b.classList.remove('selected'));
+    btn.classList.add('selected');
+    selectedEmoji = emoji;
+  }
+
+  let cardCounter = 4;
+  function sendAttentionCard() {
+    const preset = document.getElementById('composer-preset');
+    const custom = document.getElementById('composer-custom');
+    const recipient = document.getElementById('composer-recipient').value;
+    const purpose = preset.value === '__custom__' ? (custom.value.trim() || 'Untitled') : preset.value;
+
+    cardCounter += 1;
+    const id = 'va-card-' + cardCounter;
+    const card = document.createElement('div');
+    card.className = 'va-card';
+    card.id = id;
+
+    const pin = document.createElement('div');
+    pin.className = 'pin';
+
+    const visual = document.createElement('div');
+    visual.className = 'visual';
+    visual.textContent = selectedEmoji;
+
+    const purposeEl = document.createElement('div');
+    purposeEl.className = 'purpose';
+    purposeEl.textContent = purpose;
+
+    const fromEl = document.createElement('div');
+    fromEl.className = 'from';
+    fromEl.textContent = 'to ' + recipient;
+
+    const ackBtn = document.createElement('button');
+    ackBtn.className = 'comic-btn green';
+    ackBtn.textContent = 'Ack';
+    ackBtn.onclick = () => vaAck(id);
+
+    card.append(pin, visual, purposeEl, fromEl, ackBtn);
+    document.getElementById('va-shelf').appendChild(card);
+
+    if (preset.value === '__custom__') custom.value = '';
+  }
+</script>
+</body>
+</html>
