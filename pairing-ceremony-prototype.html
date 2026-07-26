@@ -1,0 +1,232 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Pairing Ceremony — Prototype (Postcard Badges)</title>
+<style>
+  :root {
+    --cream: #f4e8ce;
+    --paper: #fbf4e4;
+    --ink: #2b1d14;
+    --rust: #b6502f;
+    --teal: #2f6f6b;
+    --teal-dark: #1f4d4a;
+    --mustard: #e8a33d;
+    --red: #c1443a;
+    --green: #5c8a52;
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0;
+    font-family: 'Futura', 'Century Gothic', 'Trebuchet MS', sans-serif;
+    background:
+      radial-gradient(circle, rgba(43,29,20,0.06) 1px, transparent 1.2px) 0 0/14px 14px,
+      var(--cream);
+    color: var(--ink);
+    min-height: 100vh;
+    padding: 24px 16px 60px;
+  }
+  .note {
+    max-width: 760px;
+    margin: 0 auto 18px;
+    font-size: 12px;
+    letter-spacing: 0.06em;
+    text-transform: uppercase;
+    color: var(--rust);
+    border: 2px dashed var(--rust);
+    background: var(--paper);
+    padding: 8px 12px;
+    border-radius: 8px;
+    text-align: center;
+  }
+  .stage {
+    max-width: 760px;
+    margin: 0 auto;
+    background: var(--paper);
+    border: 4px solid var(--ink);
+    border-radius: 20px;
+    box-shadow: 8px 8px 0 var(--ink);
+    padding: 28px;
+    position: relative;
+    overflow: hidden;
+  }
+  .stage-title {
+    font-weight: 800;
+    text-transform: uppercase;
+    letter-spacing: 0.08em;
+    font-size: 22px;
+    margin: 0 0 4px;
+    color: var(--rust);
+  }
+  .stage-sub {
+    font-size: 13px;
+    color: var(--ink);
+    opacity: 0.75;
+    margin-bottom: 20px;
+  }
+  .comic-btn {
+    font-family: inherit;
+    font-weight: 800;
+    text-transform: uppercase;
+    letter-spacing: 0.04em;
+    border: 3px solid var(--ink);
+    border-radius: 10px;
+    padding: 10px 16px;
+    cursor: pointer;
+    background: var(--mustard);
+    color: var(--ink);
+    box-shadow: 4px 4px 0 var(--ink);
+    transition: transform 0.08s ease;
+  }
+  .comic-btn:active { transform: translate(3px, 3px); box-shadow: 1px 1px 0 var(--ink); }
+  .comic-btn.green { background: var(--green); color: var(--paper); }
+  .comic-btn.red { background: var(--red); color: var(--paper); }
+
+  /* ============ Postcard Badges ============ */
+  .card-deck {
+    display: flex; gap: 16px; overflow-x: auto; padding: 6px 2px 18px;
+  }
+  .postcard {
+    flex: 0 0 200px;
+    background: var(--paper);
+    border: 3px solid var(--ink);
+    border-radius: 4px;
+    padding: 14px;
+    position: relative;
+    box-shadow: 5px 5px 0 rgba(43,29,20,0.35);
+    transform: rotate(var(--tilt, 0deg));
+  }
+  .postcard:nth-child(1) { --tilt: -2deg; }
+  .postcard:nth-child(2) { --tilt: 1.5deg; }
+  .postcard:nth-child(3) { --tilt: -1deg; }
+  .postcard .icon { font-size: 34px; text-align: center; margin-bottom: 6px; }
+  .postcard .callsign { font-weight: 800; text-align: center; font-size: 15px; }
+  .postcard .loc { text-align: center; font-size: 11px; opacity: 0.7; margin-bottom: 8px; }
+  .seal-row { display: flex; justify-content: center; gap: 6px; margin: 10px 0; }
+  .seal-half {
+    width: 46px; height: 46px; border-radius: 50%;
+    border: 3px solid var(--ink);
+    display: flex; align-items: center; justify-content: center;
+    font-weight: 800; font-size: 11px;
+    background: var(--mustard);
+  }
+  .seal-half.theirs { background: var(--teal); color: var(--paper); }
+  .stamp {
+    position: absolute; top: 40%; left: 50%;
+    transform: translate(-50%, -50%) rotate(-14deg);
+    border: 4px solid var(--red); color: var(--red);
+    font-weight: 800; text-transform: uppercase; letter-spacing: 0.06em;
+    padding: 4px 10px; border-radius: 8px; font-size: 15px;
+    opacity: 0; pointer-events: none;
+  }
+  .postcard.stamped .stamp { opacity: 0.9; }
+  .postcard.torn { opacity: 0.35; filter: grayscale(0.6); }
+  .postcard .actions { display: flex; gap: 6px; margin-top: 8px; }
+  .postcard .actions .comic-btn { flex: 1; padding: 6px 4px; font-size: 11px; box-shadow: 2px 2px 0 var(--ink); }
+  .rolodex { border-top: 2px dashed var(--ink); padding-top: 14px; margin-top: 6px; }
+  .rolodex-title { font-weight: 800; text-transform: uppercase; font-size: 12px; letter-spacing: 0.06em; margin-bottom: 10px; color: var(--teal-dark); }
+  .rolodex-item {
+    display: flex; align-items: center; gap: 10px;
+    background: var(--paper); border: 2px solid var(--ink); border-radius: 8px;
+    padding: 8px 12px; margin-bottom: 8px;
+  }
+  .rolodex-item .tag {
+    font-family: inherit; font-size: 12px; border: 2px solid var(--ink); border-radius: 6px;
+    padding: 3px 6px; flex: 1;
+  }
+  .vpn-add {
+    margin-top: 18px; padding-top: 14px; border-top: 2px dashed var(--ink);
+    font-size: 12px; display: flex; gap: 8px; align-items: center; flex-wrap: wrap;
+  }
+  .vpn-add input {
+    font-family: inherit; border: 2px solid var(--ink); border-radius: 6px;
+    padding: 6px 8px; flex: 1; min-width: 160px;
+  }
+</style>
+</head>
+<body>
+
+  <div class="note">PROTOTYPE — pairing ceremony, issue #7. Postcard Badges, chosen over Directory Panel and Comic Strip Tuning. Throwaway.</div>
+
+  <div class="stage">
+    <h1 class="stage-title">Postcards From the Network</h1>
+    <p class="stage-sub">Every discovered device arrives as an illustrated postcard. Match the wax seals, stamp it approved, or toss it on the reject pile.</p>
+
+    <div class="card-deck">
+      <div class="postcard" id="pc-1">
+        <div class="stamp">Approved</div>
+        <div class="icon">📺</div>
+        <div class="callsign">Dad's iPad</div>
+        <div class="loc">Living Room · just now</div>
+        <div class="seal-row">
+          <div class="seal-half">7A9K</div>
+          <div class="seal-half theirs">7A9K</div>
+        </div>
+        <div class="actions">
+          <button class="comic-btn green" onclick="stampApprove('pc-1')">Stamp Approved</button>
+          <button class="comic-btn red" onclick="tearUp('pc-1')">Tear Up</button>
+        </div>
+      </div>
+      <div class="postcard" id="pc-2">
+        <div class="stamp">Approved</div>
+        <div class="icon">💻</div>
+        <div class="callsign">Uncle Ray's PC</div>
+        <div class="loc">VPN · Aalborg</div>
+        <div class="seal-row">
+          <div class="seal-half">5N3P</div>
+          <div class="seal-half theirs">5N3Q</div>
+        </div>
+        <div class="actions">
+          <button class="comic-btn green" onclick="stampApprove('pc-2')">Stamp Approved</button>
+          <button class="comic-btn red" onclick="tearUp('pc-2')">Tear Up</button>
+        </div>
+      </div>
+      <div class="postcard" id="pc-3">
+        <div class="stamp">Approved</div>
+        <div class="icon">📻</div>
+        <div class="callsign">Basement Tablet</div>
+        <div class="loc">Garage · 3 min ago</div>
+        <div class="seal-row">
+          <div class="seal-half">Q8ZC</div>
+          <div class="seal-half theirs">Q8ZC</div>
+        </div>
+        <div class="actions">
+          <button class="comic-btn green" onclick="stampApprove('pc-3')">Stamp Approved</button>
+          <button class="comic-btn red" onclick="tearUp('pc-3')">Tear Up</button>
+        </div>
+      </div>
+    </div>
+
+    <div class="rolodex">
+      <div class="rolodex-title">Rolodex — already approved</div>
+      <div class="rolodex-item">
+        <span>💻</span>
+        <input class="tag" value="Mom's Laptop">
+        <button class="comic-btn red" style="padding:4px 8px;font-size:10px;" onclick="returnToSender(this)">Return to Sender</button>
+      </div>
+    </div>
+
+    <div class="vpn-add">
+      <strong>Not on this network?</strong>
+      <input type="text" placeholder="Add a VPN peer by address (e.g. 10.10.4.2)">
+      <button class="comic-btn" style="padding:6px 12px;font-size:11px;">Add</button>
+    </div>
+  </div>
+
+<script>
+  function stampApprove(id) {
+    document.getElementById(id).classList.add('stamped');
+  }
+  function tearUp(id) {
+    document.getElementById(id).classList.add('torn');
+  }
+  function returnToSender(btn) {
+    const item = btn.closest('.rolodex-item');
+    item.style.opacity = '0.4';
+    btn.textContent = 'Returned';
+    btn.disabled = true;
+  }
+</script>
+</body>
+</html>
