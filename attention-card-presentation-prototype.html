@@ -1,0 +1,215 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Attention Card Presentation — Prototype</title>
+<style>
+  :root {
+    --cream: #f4e8ce;
+    --paper: #fbf4e4;
+    --ink: #2b1d14;
+    --rust: #b6502f;
+    --teal: #2f6f6b;
+    --mustard: #e8a33d;
+    --red: #c1443a;
+    --green: #5c8a52;
+    --win-blue: #0067c0;
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0;
+    font-family: 'Futura', 'Century Gothic', 'Trebuchet MS', sans-serif;
+    background:
+      radial-gradient(circle, rgba(43,29,20,0.06) 1px, transparent 1.2px) 0 0/14px 14px,
+      var(--cream);
+    color: var(--ink);
+    padding: 24px 16px 100px;
+  }
+  .note {
+    max-width: 1080px; margin: 0 auto 16px; font-size: 12px; letter-spacing: 0.06em; text-transform: uppercase;
+    color: var(--rust); border: 2px dashed var(--rust); background: var(--paper); padding: 8px 12px; border-radius: 8px; text-align: center;
+  }
+  .stage {
+    max-width: 1080px; margin: 0 auto; border: 4px solid var(--ink); border-radius: 16px;
+    box-shadow: 8px 8px 0 var(--ink); overflow: hidden; background: var(--paper); padding: 20px;
+  }
+  .variant { display: none; }
+  .variant.active { display: block; }
+  .heading { font-weight: 800; text-transform: uppercase; letter-spacing: 0.08em; font-size: 20px; color: var(--rust); margin: 0 0 4px; }
+  .sub { font-size: 13px; opacity: 0.75; margin-bottom: 20px; }
+  .tradeoffs {
+    margin-top: 22px; border: 3px solid var(--ink); border-radius: 12px; background: var(--cream); padding: 14px 18px; font-size: 13px;
+  }
+  .tradeoffs h3 { margin: 0 0 8px; font-size: 12px; text-transform: uppercase; letter-spacing: 0.06em; color: var(--rust); }
+  .tradeoffs ul { margin: 0; padding-left: 18px; }
+  .tradeoffs li { margin-bottom: 4px; }
+
+  /* ============ Desktop backdrop, shared, to show these popping OVER other windows ============ */
+  .desktop {
+    position: relative; height: 460px; border: 3px solid var(--ink); border-radius: 10px; overflow: hidden;
+    background: linear-gradient(160deg, #d8e6ea, #b9cfd6);
+  }
+  .desktop .fake-window {
+    position: absolute; top: 30px; left: 30px; width: 60%; height: 70%;
+    background: #f2f2f2; border: 1px solid #999; border-radius: 6px; box-shadow: 0 4px 18px rgba(0,0,0,0.25);
+  }
+  .desktop .fake-window .bar { height: 28px; background: #e2e2e2; border-bottom: 1px solid #ccc; display: flex; align-items: center; padding: 0 10px; font-size: 11px; color: #666; }
+  .desktop .taskbar {
+    position: absolute; bottom: 0; left: 0; right: 0; height: 40px; background: rgba(20,20,20,0.85);
+    display: flex; align-items: center; padding: 0 14px; gap: 10px;
+  }
+  .desktop .taskbar .tray-icon {
+    width: 20px; height: 20px; border-radius: 4px; background: var(--mustard); display: flex; align-items: center; justify-content: center; font-size: 12px;
+  }
+
+  /* ============ Variant A: Native Windows toast ============ */
+  .toast {
+    position: absolute; bottom: 52px; right: 16px; width: 300px;
+    background: #fbfbfb; border: 1px solid #d4d4d4; border-radius: 8px; box-shadow: 0 8px 28px rgba(0,0,0,0.28);
+    font-family: 'Segoe UI', Arial, sans-serif; overflow: hidden; color: #1b1b1b;
+  }
+  .toast .app-row { display: flex; align-items: center; gap: 8px; padding: 10px 12px 4px; font-size: 11px; color: #555; }
+  .toast .app-row .app-icon { width: 16px; height: 16px; border-radius: 3px; background: var(--win-blue); }
+  .toast .hero { width: 100%; height: 130px; object-fit: cover; background: var(--mustard); display: flex; align-items: center; justify-content: center; font-size: 46px; }
+  .toast .body { padding: 8px 12px; }
+  .toast .title { font-weight: 600; font-size: 14px; margin-bottom: 2px; }
+  .toast .text { font-size: 12px; color: #444; }
+  .toast .actions { display: flex; border-top: 1px solid #e6e6e6; }
+  .toast .actions button {
+    flex: 1; padding: 9px 0; border: none; background: none; font-family: inherit; font-size: 12px;
+    color: var(--win-blue); cursor: pointer; border-right: 1px solid #e6e6e6;
+  }
+  .toast .actions button:last-child { border-right: none; }
+  .toast .actions button:hover { background: #f0f0f0; }
+
+  /* ============ Variant B: Custom popup window (full comic control) ============ */
+  .popup {
+    position: absolute; bottom: 60px; right: 30px; width: 220px; height: 220px;
+    background: var(--paper); border: 4px solid var(--ink); border-radius: 16px;
+    box-shadow: 8px 8px 0 var(--ink); transform: rotate(-2deg);
+    display: flex; flex-direction: column; align-items: center; justify-content: center; text-align: center; padding: 16px;
+  }
+  .popup .pin { position: absolute; top: -9px; left: 50%; transform: translateX(-50%); width: 16px; height: 16px; border-radius: 50%; background: var(--red); border: 2px solid var(--ink); }
+  .popup .visual { font-size: 56px; margin-bottom: 8px; }
+  .popup .purpose { font-weight: 800; font-size: 16px; }
+  .popup .from { font-size: 11px; opacity: 0.7; margin: 6px 0 12px; }
+  .popup .actions { display: flex; gap: 6px; }
+  .popup .actions button {
+    font-family: inherit; font-weight: 800; text-transform: uppercase; font-size: 10px; letter-spacing: 0.03em;
+    border: 3px solid var(--ink); border-radius: 8px; padding: 6px 8px; cursor: pointer; background: var(--mustard); box-shadow: 2px 2px 0 var(--ink);
+  }
+  .popup .actions button.green { background: var(--green); color: var(--paper); }
+  .popup .badge-note {
+    position: absolute; top: -14px; right: -14px; background: var(--teal); color: var(--paper); border: 3px solid var(--ink);
+    border-radius: 50%; width: 46px; height: 46px; display: flex; align-items: center; justify-content: center;
+    font-size: 9px; font-weight: 800; text-align: center; line-height: 1.1; transform: rotate(8deg);
+  }
+
+  /* ============ Switcher ============ */
+  .switcher {
+    position: fixed; bottom: 18px; left: 50%; transform: translateX(-50%);
+    background: var(--ink); color: var(--paper); border-radius: 999px; padding: 8px 10px;
+    display: flex; align-items: center; gap: 10px; box-shadow: 0 6px 20px rgba(0,0,0,0.35); z-index: 50;
+  }
+  .switcher button { background: var(--paper); color: var(--ink); border: none; border-radius: 50%; width: 30px; height: 30px; cursor: pointer; font-weight: 800; font-size: 15px; }
+  .switcher .label { font-size: 12px; font-weight: 700; min-width: 260px; text-align: center; letter-spacing: 0.03em; }
+</style>
+</head>
+<body>
+
+  <div class="note">PROTOTYPE — attention card presentation, issue #16 (part 2 of 2). Comparing native Windows toast vs. a custom popup window. Throwaway.</div>
+
+  <div class="stage">
+
+    <!-- ================= VARIANT A: Native Windows toast ================= -->
+    <div class="variant active" id="variant-a">
+      <div class="heading">Native Windows Toast</div>
+      <div class="sub">Uses Microsoft.Windows.AppNotifications with a hero image and action buttons. Durable, appears in Action Center, works while the main window is closed — but Windows owns layout, theming, and size.</div>
+
+      <div class="desktop">
+        <div class="fake-window"><div class="bar">some other app you were using</div></div>
+        <div class="toast">
+          <div class="app-row"><span class="app-icon"></span> Intercom</div>
+          <div class="hero">🍽️</div>
+          <div class="body">
+            <div class="title">Dinner's ready</div>
+            <div class="text">from Mom</div>
+          </div>
+          <div class="actions">
+            <button>Acknowledge</button>
+            <button>Snooze</button>
+            <button>Dismiss</button>
+          </div>
+        </div>
+        <div class="taskbar"><div class="tray-icon">📻</div></div>
+      </div>
+    </div>
+
+    <!-- ================= VARIANT B: Custom popup window ================= -->
+    <div class="variant" id="variant-b">
+      <div class="heading">Custom Popup Window</div>
+      <div class="sub">An app-owned, always-on-top window we fully control — true comic styling at a guaranteed size. Not in Action Center, needs its own focus/dismiss/multi-monitor handling, and has to be built and maintained as a separate surface from native notifications.</div>
+
+      <div class="desktop">
+        <div class="fake-window"><div class="bar">some other app you were using</div></div>
+        <div class="popup">
+          <div class="pin"></div>
+          <div class="badge-note">always<br>on top</div>
+          <div class="visual">🍽️</div>
+          <div class="purpose">Dinner's ready</div>
+          <div class="from">from Mom</div>
+          <div class="actions">
+            <button class="green">Acknowledge</button>
+            <button>Snooze</button>
+          </div>
+        </div>
+        <div class="taskbar"><div class="tray-icon">📻</div></div>
+      </div>
+    </div>
+
+    <div class="tradeoffs">
+      <h3>Why this is a real trade-off, not just a style choice</h3>
+      <ul>
+        <li><strong>Native toast:</strong> durable (survives even if the app crashes before it's seen), shows in Action Center/notification history, respects Windows Focus Sessions and accessibility settings automatically — but the research doc is explicit that the 320×320 illustration is an <em>asset source size</em>, not a guaranteed rendered square; Windows owns the actual layout.</li>
+        <li><strong>Custom popup:</strong> guarantees the comic-card look and exact size every time — but it's a second surface to build and maintain (focus stealing, multi-monitor placement, DPI scaling, its own dismiss/snooze state), doesn't appear in Action Center, and needs its own accessibility work Windows would otherwise give for free.</li>
+        <li>Recommendation to prototype further: native toast as the default durable path, reserving a custom popup only if the 320×320 comic-card visual is judged essential after seeing both side-by-side at real Windows DPI/text scales, per the resident-app research doc's own suggested next step.</li>
+      </ul>
+    </div>
+
+  </div>
+
+  <div class="switcher">
+    <button onclick="prevVariant()">←</button>
+    <div class="label" id="switch-label">A — Native Windows Toast</div>
+    <button onclick="nextVariant()">→</button>
+  </div>
+
+<script>
+  const order = ['a', 'b'];
+  const names = { a: 'A — Native Windows Toast', b: 'B — Custom Popup Window' };
+  let current = 'a';
+
+  function setVariant(v) {
+    order.forEach(k => document.getElementById('variant-' + k).classList.remove('active'));
+    document.getElementById('variant-' + v).classList.add('active');
+    current = v;
+    document.getElementById('switch-label').textContent = names[v];
+    const params = new URLSearchParams(window.location.search);
+    params.set('variant', v.toUpperCase());
+    window.history.replaceState({}, '', `${window.location.pathname}?${params.toString()}`);
+  }
+  function nextVariant() { setVariant(order[(order.indexOf(current) + 1) % order.length]); }
+  function prevVariant() { setVariant(order[(order.indexOf(current) - 1 + order.length) % order.length]); }
+
+  document.addEventListener('keydown', e => {
+    if (e.target.matches('input, textarea, [contenteditable]')) return;
+    if (e.key === 'ArrowLeft') prevVariant();
+    if (e.key === 'ArrowRight') nextVariant();
+  });
+
+  const initial = new URLSearchParams(window.location.search).get('variant')?.toLowerCase();
+  if (initial && order.includes(initial)) setVariant(initial); else setVariant('a');
+</script>
+</body>
+</html>
