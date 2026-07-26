@@ -32,7 +32,7 @@ A peer reachable through a routed private network but not necessarily visible to
 
 ## Conversation
 
-A direct or group exchange between peers. Voice is preferred when available; text chat remains available as the fallback.
+A direct or group exchange between peers. Voice is preferred when available; text chat remains available as the fallback. Chat messages are confirmed only by delivery (the message reached the recipient's device); there is no read receipt or acknowledgement step for chat, unlike an attention card.
 
 ## Spoken chat
 
@@ -54,9 +54,13 @@ The exclusive right to transmit into a group voice conversation. A group has at 
 
 A request to receive the voice floor when it becomes available.
 
+## Floor coordinator
+
+The peer with authority to grant the voice floor to the next waiting participant in a group conversation. The peer who starts the group conversation is its first floor coordinator. If the coordinator leaves, every remaining participant deterministically recomputes the same replacement (lowest stable peer ID among active participants) without a manual claim step. The raise-hand queue itself is broadcast to every participant, not held privately by the coordinator, so a new coordinator is always already caught up.
+
 ## Interrupt request
 
-An urgent request for the current speaker to transfer the voice floor. It does not mix a second audio stream into the conversation.
+An urgent request for the current speaker to transfer the voice floor. It does not mix a second audio stream into the conversation. If the current speaker yields, the floor transfers directly to the interrupter, bypassing the raise-hand queue.
 
 ## Attention card
 
