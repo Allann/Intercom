@@ -87,7 +87,7 @@ The group voice floor panel ([issue #9](https://github.com/Allann/Intercom/issue
 
 ## 8. Installation, startup, and updates (ADR-0003)
 
-Self-signed identity certificate, sideloaded MSIX, trusted to `Cert:\CurrentUser\TrustedPeople` (no administrator elevation required). Launch-at-sign-in is enabled automatically during first-run setup with no yes/no prompt — a passive confirmation line only, toggleable afterward in Settings, always reflecting actual OS state honestly.
+Self-signed identity certificate, sideloaded MSIX. Real end-user installation requires a one-time elevated trust step (`Cert:\LocalMachine\TrustedPeople` — AppX signature validation checks the machine-wide store, correcting ADR-0003's original no-elevation claim); the developer's own inner loop instead registers the loose build output directly via Developer Mode, with no signing or trust step at all. Launch-at-sign-in is enabled automatically during first-run setup with no yes/no prompt — a passive confirmation line only, toggleable afterward in Settings, always reflecting actual OS state honestly.
 
 Closing the main window hides it to the tray; an explicit tray action quits. One combined, Teams-style onboarding screen requests microphone access and notification permission together, with LAN discovery deliberately started at that same moment so the Windows Firewall private-network prompt clusters into the same first-run moment. The app's settings deep-link to the relevant OS Settings pages for later review and reflect actual granted/denied state.
 

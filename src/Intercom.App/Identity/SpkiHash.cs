@@ -11,6 +11,6 @@ namespace Intercom.App.Identity;
 /// </summary>
 static class SpkiHash
 {
-    public static byte[] Compute(X509Certificate2 certificate) =>
-        SHA256.HashData(certificate.PublicKey.ExportSubjectPublicKeyInfo());
+    public static SpkiPin Compute(X509Certificate2 certificate) =>
+        new(SHA256.HashData(certificate.PublicKey.ExportSubjectPublicKeyInfo()));
 }

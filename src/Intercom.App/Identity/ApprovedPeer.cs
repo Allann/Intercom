@@ -11,15 +11,26 @@ public sealed record ApprovedPeer
 {
     public required Guid PeerId { get; init; }
     public required string FriendlyName { get; set; }
-    public required byte[] SpkiSha256 { get; init; }
-    public required byte[] Certificate { get; init; }
+
+    /// <summary>Null once forgotten — ADR-0002 requires removing the SPKI pin
+    /// locally, not merely flagging the peer, so a revoked record genuinely
+    /// no longer carries a usable pin.</summary>
+    public required SpkiPin? SpkiSha256 { get; init; }
+
+    /// <summary>Null once forgotten, for the same reason as SpkiSha256.</summary>
+    public required byte[]? Certificate { get; init; }
+
     public required DateTimeOffset ApprovedAt { get; init; }
+
+    /// <summary>Null once forgotten — ADR-0002 requires removing the local
+    /// contact association on forget, not just the pin.</summary>
     public string? ContactId { get; set; }
 
     /// <summary>
-    /// Set by Forget. Kept rather than deleted outright so a forgotten peer's
-    /// prior approval remains visible for local audit/debugging, per
-    /// docs/research/pairing-security.md — it is never treated as approved.
+    /// Set by Forget. The record itself is kept (rather than deleted outright)
+    /// so a forgotten peer remains visible for local audit/debugging, per
+    /// docs/research/pairing-security.md — but with its pin/cert/contact
+    /// association actually removed, not merely flagged. Never treated as approved.
     /// </summary>
     public bool Revoked { get; set; }
 }

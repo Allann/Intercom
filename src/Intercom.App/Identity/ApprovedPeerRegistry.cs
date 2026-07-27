@@ -13,19 +13,29 @@ public sealed class ApprovedPeerRegistry
     public void Add(ApprovedPeer peer) => _peers.Add(peer);
 
     /// <summary>Fail-closed lookup: never returns a revoked peer as approved.</summary>
-    public ApprovedPeer? FindApprovedBySpki(byte[] spkiSha256) =>
-        _peers.FirstOrDefault(p => !p.Revoked && p.SpkiSha256.AsSpan().SequenceEqual(spkiSha256));
+    public ApprovedPeer? FindApprovedBySpki(SpkiPin spkiSha256) =>
+        _peers.FirstOrDefault(p => !p.Revoked && p.SpkiSha256 == spkiSha256);
 
     /// <summary>
-    /// Local and immediate (ADR-0002): marks the peer revoked so it is never
-    /// again treated as approved. Does not notify the other side — that is a
-    /// best-effort, connection-layer concern, not this registry's job.
+    /// Local and immediate (ADR-0002): removes the peer's SPKI pin, certificate,
+    /// and contact association — not merely a flag — so it can never again be
+    /// treated as approved or grouped under a contact. The record itself is
+    /// kept, marked Revoked, as a local audit trace. Does not notify the other
+    /// side — that is a best-effort, connection-layer concern, not this
+    /// registry's job.
     /// </summary>
     public bool Forget(Guid peerId)
     {
-        var peer = _peers.FirstOrDefault(p => p.PeerId == peerId);
-        if (peer is null || peer.Revoked) return false;
-        peer.Revoked = true;
+        var index = _peers.FindIndex(p => p.PeerId == peerId);
+        if (index < 0 || _peers[index].Revoked) return false;
+
+        _peers[index] = _peers[index] with
+        {
+            Revoked = true,
+            SpkiSha256 = null,
+            Certificate = null,
+            ContactId = null,
+        };
         return true;
     }
 

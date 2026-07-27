@@ -21,7 +21,7 @@ public sealed class LocalIdentity
     public required X509Certificate2 Certificate { get; init; }
     public required DateTimeOffset CreatedAt { get; init; }
 
-    public byte[] SpkiSha256 => SpkiHash.Compute(Certificate);
+    public SpkiPin SpkiSha256 => SpkiHash.Compute(Certificate);
 
     public static LocalIdentity CreateNew()
     {

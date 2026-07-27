@@ -34,6 +34,13 @@ public partial class App : Application
             // previously approved peer is now unknown and needs re-pairing.
             System.Diagnostics.Debug.WriteLine("Local identity was unreadable and has been regenerated.");
         }
+        else if (_identityStore.RegistryWasReset)
+        {
+            // TODO(#22 pairing ceremony): surface this too — the identity is
+            // still valid, but the approved-peer list itself was unreadable
+            // and every peer now needs re-pairing.
+            System.Diagnostics.Debug.WriteLine("Approved-peer registry was unreadable and has been reset.");
+        }
 
         _window = new MainWindow();
         _window.QuitRequested += OnQuitRequested;
