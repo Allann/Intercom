@@ -1,70 +1,81 @@
-# Building Intercom.App
+# Building and installing Intercom.App
 
-## Toolchain gotcha
+Intercom is a packaged, x64 WinUI 3 application. The repository pins .NET SDK
+9.0 in `global.json`, while the WinUI/MSIX targets run under Visual Studio's
+MSBuild because they depend on Visual Studio's PRI packaging tasks.
 
-Plain `dotnet build` / `dotnet run` **fails** on this project with:
+## Prerequisites
 
+- Visual Studio with the Windows application development workload.
+- The .NET 10 LTS SDK selected by the repository's `global.json`.
+- PowerShell running as the Windows user who will install the test package.
+
+## Compile without producing an installer
+
+Locate MSBuild through `vswhere.exe`, then run:
+
+```powershell
+& '<Visual Studio>\MSBuild\Current\Bin\MSBuild.exe' `
+    src\Intercom.App\Intercom.App.csproj `
+    -restore `
+    -p:Configuration=Debug `
+    -p:Platform=x64
 ```
-error MSB4062: The "Microsoft.Build.Packaging.Pri.Tasks.ExpandPriContent" task
-could not be loaded... Microsoft.Build.Packaging.Pri.Tasks.dll ... The system
-cannot find the file specified.
+
+Plain `dotnet build` is not supported for this project. The .NET SDK's MSBuild
+does not contain `Microsoft.Build.Packaging.Pri.Tasks.dll`, which WinUI resource
+generation uses for both compile and package builds.
+
+## Produce a signed MSIX
+
+From the repository root:
+
+```powershell
+& .\src\Intercom.App\build-msix.ps1 -Configuration Release
 ```
 
-The .NET SDK's own bundled MSBuild doesn't ship the MSIX/PRI packaging task
-assemblies that `Microsoft.WindowsAppSDK`'s build targets need (even for an
-unpackaged build — PRI resource generation runs regardless). Those assemblies
-come from Visual Studio's install instead. Build with VS's MSBuild directly:
+The script:
 
+1. Finds Visual Studio MSBuild with `vswhere.exe`.
+2. Reuses or generates a five-year `CN=Intercom Development` code-signing
+   certificate in `Cert:\CurrentUser\My`.
+3. Exports its public certificate under `artifacts\msix`.
+4. Generates and signs the x64 package under `artifacts\msix`.
+
+Package creation requires no elevation. The private key stays in the user's
+certificate store and is never written into the repository or artifacts
+directory.
+
+Windows AppX deployment currently requires a self-signed package certificate
+in the local machine's Trusted People store. Trusting it therefore requires a
+one-time elevated command:
+
+```powershell
+Import-Certificate `
+    -FilePath .\artifacts\msix\Intercom-Development.cer `
+    -CertStoreLocation Cert:\LocalMachine\TrustedPeople
 ```
-"C:\Program Files\Microsoft Visual Studio\18\Insiders\MSBuild\Current\Bin\MSBuild.exe" Intercom.App.csproj -restore -p:Configuration=Debug -p:Platform=x64
+
+This conflicts with ADR-0003's current-user/no-elevation assumption. A package
+signed by a trusted public, enterprise, or managed signing certificate is the
+way to retain installation without administrative machine setup.
+
+Install the generated `.msix` by double-clicking it or with:
+
+```powershell
+Add-AppxPackage .\artifacts\msix\Intercom.App_1.0.0.0_x64_Test\Intercom.App_1.0.0.0_x64.msix
 ```
 
-(Adjust the path to whatever your actual Visual Studio install path is —
-`vswhere.exe` or the Visual Studio Installer can confirm it. `dotnet new list`
-also confirmed this machine has no WinUI 3 project templates installed via
-`dotnet new`; they come from the Visual Studio "Windows application
-development" workload, not a `dotnet workload install` package.)
+The package declares `IntercomStartupTask`. On first run, Intercom enables it;
+Windows still retains authority over user-disabled and policy-disabled states.
 
-## Current status (issue #18)
+## Manual acceptance checks
 
-Builds clean (0 warnings, 0 errors) as an **unpackaged** app
-(`WindowsPackageType=None`, `WindowsAppSDKSelfContained=true`). Implemented so far:
-
-- Custom `Main` (`Program.cs`) with single-instance handling via
-  `AppInstance.FindOrRegisterForKey` — a second launch redirects activation to
-  the existing instance instead of opening a second window.
-- Tray icon (`Tray/TrayIcon.cs`, `Shell_NotifyIcon` interop) and a subclassed
-  window procedure (`Tray/TrayMessagePump.cs`) handling left-click (show
-  window) and right-click (Open/Quit context menu via `TrackPopupMenuEx`).
-- Closing the main window hides it instead of exiting
-  (`AppWindow.Closing` cancelled + `Hide()`); only the tray Quit action calls
-  `MainWindow.Quit()`, which tears down the tray icon/pump and exits.
-- Crash visibility (`Diagnostics/CrashMarker.cs`): a marker file written at
-  startup and removed on clean shutdown; if present at the next startup, the
-  previous run didn't exit cleanly.
-- Startup-task scaffolding (`Startup/StartupTaskService.cs`) — **this will
-  throw at runtime until MSIX packaging is wired up**, since
-  `Windows.ApplicationModel.StartupTask` requires package identity. The
-  exception is caught in `App.xaml.cs` rather than crashing the app.
-
-## Not yet done
-
-- **MSIX packaging and signing** (ADR-0003): self-signed cert generation,
-  `Cert:\CurrentUser\TrustedPeople` trust step, `WindowsPackageType=MSIX`,
-  actual sideloaded install. This is required for `StartupTask` to actually
-  work and for the "fresh MSIX install without elevation" acceptance
-  criterion. Not attempted yet in this pass.
-- **Real interactive verification.** This was built and compiled from an
-  automated shell with no ability to click the tray icon, trigger a second
-  launch, or confirm the context menu/keyboard accessibility actually behave
-  as intended. Run it yourself and confirm:
-  1. Launching a second instance doesn't open a second window.
-  2. Closing the window hides it; the tray icon remains; left-click reopens
-     the window; right-click shows Open/Quit; Quit actually exits.
-  3. Keyboard/screen-reader access to the tray context menu.
-  4. A forced `taskkill` followed by relaunch surfaces the "closed
-     unexpectedly" debug trace (visible today only in the debugger output —
-     wiring it into the shell UI is follow-up work once that UI exists).
-- Tray icon is currently the stock `IDI_APPLICATION` system icon — a real
-  `.ico` asset in the comic-intercom visual language (issue #8) replaces this
-  later.
+1. Install and launch the signed MSIX without elevation.
+2. Close the main window; verify the process and tray icon remain.
+3. Launch Intercom again; verify the existing window opens rather than a second
+   process being created.
+4. Exercise tray Open and Quit with both mouse and keyboard.
+5. Verify a startup-task launch remains hidden.
+6. Force-terminate Intercom, launch it again, and verify the unexpected-close
+   notice appears in the window.

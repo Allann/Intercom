@@ -9,14 +9,15 @@ namespace Intercom.App.Tray;
 /// </summary>
 public sealed class TrayIcon : IDisposable
 {
-    const int WM_TRAYICON = 0x8000 + 1; // app-defined message, delivered via NOTIFYICONDATA.uCallbackMessage
     const uint NIM_ADD = 0x00000000;
     const uint NIM_MODIFY = 0x00000001;
     const uint NIM_DELETE = 0x00000002;
     const uint NIM_SETVERSION = 0x00000004;
+    const uint NIM_SETFOCUS = 0x00000003;
     const uint NIF_MESSAGE = 0x00000001;
     const uint NIF_ICON = 0x00000002;
     const uint NIF_TIP = 0x00000004;
+    const uint NIF_GUID = 0x00000020;
     const uint NOTIFYICON_VERSION_4 = 4;
 
     readonly IntPtr _hwnd;
@@ -33,10 +34,24 @@ public sealed class TrayIcon : IDisposable
     {
         var data = MakeData(tooltip);
         _added = Shell_NotifyIconW(NIM_ADD, ref data);
-        if (_added)
+        if (!_added)
         {
-            Shell_NotifyIconW(NIM_SETVERSION, ref data);
+            throw new InvalidOperationException("Windows could not add the Intercom notification-area icon.");
         }
+
+        data.uVersionOrTimeout = NOTIFYICON_VERSION_4;
+        if (!Shell_NotifyIconW(NIM_SETVERSION, ref data))
+        {
+            Remove();
+            throw new InvalidOperationException("Windows could not configure the Intercom notification-area icon.");
+        }
+    }
+
+    public void SetFocus()
+    {
+        if (!_added) return;
+        var data = MakeData(string.Empty);
+        Shell_NotifyIconW(NIM_SETFOCUS, ref data);
     }
 
     public void UpdateTooltip(string tooltip)
@@ -60,8 +75,8 @@ public sealed class TrayIcon : IDisposable
         {
             cbSize = Marshal.SizeOf<NOTIFYICONDATAW>(),
             hWnd = _hwnd,
-            uFlags = NIF_MESSAGE | NIF_ICON | NIF_TIP,
-            uCallbackMessage = WM_TRAYICON,
+            uFlags = NIF_MESSAGE | NIF_ICON | NIF_TIP | NIF_GUID,
+            uCallbackMessage = TrayInterop.CallbackMessage,
             hIcon = LoadIconForApp(),
             szTip = tooltip,
             guidItem = _iconGuid,

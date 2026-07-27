@@ -1,0 +1,12 @@
+{
+    "version": "0.2.0",
+    "configurations": [
+        {
+            "name": "Intercom: Debug (packaged, attach)",
+            "type": "coreclr",
+            "request": "attach",
+            "processName": "Intercom.App",
+            "preLaunchTask": "intercom: register and launch (packaged)"
+        }
+    ]
+}

@@ -1,4 +1,5 @@
 using Microsoft.UI.Xaml;
+using Microsoft.Windows.AppLifecycle;
 using Intercom.App.Diagnostics;
 using Intercom.App.Startup;
 using Intercom.App.Tray;
@@ -13,6 +14,7 @@ public partial class App : Application
     TrayIcon? _trayIcon;
     TrayMessagePump? _trayPump;
     readonly CrashMarker _crashMarker = new();
+    bool _crashNoticePending;
 
     public App()
     {
@@ -21,47 +23,64 @@ public partial class App : Application
 
     protected override void OnLaunched(LaunchActivatedEventArgs args)
     {
-        var closedUnexpectedly = _crashMarker.ClosedUnexpectedlyLastTime();
-        if (closedUnexpectedly)
-        {
-            // TODO(#18 follow-up): surface this via the shell UI once it exists,
-            // rather than just a debug trace. No watchdog/auto-restart (ADR-0003) —
-            // this is visibility only.
-            System.Diagnostics.Debug.WriteLine("Intercom closed unexpectedly last time.");
-        }
+        _crashNoticePending = _crashMarker.ClosedUnexpectedlyLastTime();
 
         _window = new MainWindow();
         _window.QuitRequested += OnQuitRequested;
 
         _trayPump = new TrayMessagePump(_window.Hwnd);
-        _trayPump.OpenRequested += () => _window.ShowFromTray();
+        _trayPump.OpenRequested += ShowWindow;
         _trayPump.QuitRequested += () => _window.Quit();
+        _trayPump.FocusReturnRequested += () => _trayIcon?.SetFocus();
 
         _trayIcon = new TrayIcon(_window.Hwnd, TrayIconGuid);
         _trayIcon.Add("Intercom");
 
-        _window.Activate();
+        Program.RedirectedActivationReceived += OnRedirectedActivation;
+
+        if (Program.InitialActivationArguments.Kind != ExtendedActivationKind.StartupTask)
+        {
+            ShowWindow();
+        }
 
         _ = TryEnableStartupAsync();
+    }
+
+    void OnRedirectedActivation(AppActivationArguments args)
+    {
+        _window?.DispatcherQueue.TryEnqueue(ShowWindow);
+    }
+
+    void ShowWindow()
+    {
+        if (_window is null) return;
+
+        _window.Activate();
+        _window.ShowFromTray();
+        if (_crashNoticePending)
+        {
+            _window.ShowCrashNotice();
+            _crashNoticePending = false;
+        }
     }
 
     async Task TryEnableStartupAsync()
     {
         try
         {
-            // ADR-0003: auto-enable at first run, no prompt. Requires package
-            // identity (MSIX) to function — expected to throw until the
-            // packaging pass lands; caught here rather than crashing the app.
+            // ADR-0003: auto-enable at first run, no prompt. If the user or
+            // policy disables startup later, StartupTask will preserve that state.
             await new StartupTaskService().EnableOnFirstRunAsync();
         }
         catch (Exception ex)
         {
-            System.Diagnostics.Debug.WriteLine($"StartupTask unavailable (expected until MSIX packaging): {ex.Message}");
+            System.Diagnostics.Debug.WriteLine($"StartupTask unavailable: {ex.Message}");
         }
     }
 
     void OnQuitRequested()
     {
+        Program.RedirectedActivationReceived -= OnRedirectedActivation;
         _crashMarker.MarkCleanShutdown();
         _trayIcon?.Dispose();
         _trayPump?.Dispose();

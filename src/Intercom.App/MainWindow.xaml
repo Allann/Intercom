@@ -2,7 +2,14 @@
     x:Class="Intercom.App.MainWindow"
     xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
     xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml">
-    <StackPanel HorizontalAlignment="Center" VerticalAlignment="Center" Spacing="8">
+    <StackPanel HorizontalAlignment="Center" VerticalAlignment="Center" Spacing="8" Padding="24">
+        <InfoBar
+            x:Name="CrashNotice"
+            Title="Intercom closed unexpectedly last time"
+            Message="Your settings are safe. Intercom has restarted and is available again."
+            Severity="Warning"
+            IsOpen="False"
+            IsClosable="True" />
         <TextBlock Text="Intercom" FontSize="24" FontWeight="Bold" />
         <TextBlock Text="App shell scaffolding placeholder (issue #18)" />
     </StackPanel>

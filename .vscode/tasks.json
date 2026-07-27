@@ -1,0 +1,28 @@
+{
+    "version": "2.0.0",
+    "tasks": [
+        {
+            "label": "intercom: build",
+            "type": "shell",
+            "command": "powershell",
+            "args": [
+                "-NoProfile",
+                "-ExecutionPolicy", "Bypass",
+                "-File", "${workspaceFolder}/.vscode/scripts/build.ps1"
+            ],
+            "problemMatcher": "$msCompile"
+        },
+        {
+            "label": "intercom: register and launch (packaged)",
+            "type": "shell",
+            "command": "powershell",
+            "args": [
+                "-NoProfile",
+                "-ExecutionPolicy", "Bypass",
+                "-File", "${workspaceFolder}/.vscode/scripts/register-and-launch.ps1"
+            ],
+            "dependsOn": "intercom: build",
+            "problemMatcher": []
+        }
+    ]
+}

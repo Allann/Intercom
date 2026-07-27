@@ -38,6 +38,11 @@ public sealed partial class MainWindow : Window
         AppWin.MoveInZOrderAtTop();
     }
 
+    public void ShowCrashNotice()
+    {
+        CrashNotice.IsOpen = true;
+    }
+
     public void Quit()
     {
         AppWin.Closing -= OnAppWindowClosing;

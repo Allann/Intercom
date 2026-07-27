@@ -5,6 +5,7 @@ namespace Intercom.App.Startup;
 public enum StartupPreference
 {
     Enabled,
+    Disabled,
     DisabledByUser,
     DisabledByPolicy,
     Unknown,
@@ -29,8 +30,9 @@ public sealed class StartupTaskService
         return task.State switch
         {
             StartupTaskState.Enabled or StartupTaskState.EnabledByPolicy => StartupPreference.Enabled,
-            StartupTaskState.Disabled => StartupPreference.DisabledByUser,
-            StartupTaskState.DisabledByPolicy or StartupTaskState.DisabledByUser => StartupPreference.DisabledByPolicy,
+            StartupTaskState.Disabled => StartupPreference.Disabled,
+            StartupTaskState.DisabledByUser => StartupPreference.DisabledByUser,
+            StartupTaskState.DisabledByPolicy => StartupPreference.DisabledByPolicy,
             _ => StartupPreference.Unknown,
         };
     }

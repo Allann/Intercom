@@ -12,10 +12,11 @@ public sealed class TrayMessagePump : IDisposable
     delegate nint WndProcDelegate(nint hWnd, uint msg, nint wParam, nint lParam);
 
     const int GWLP_WNDPROC = -4;
-    const uint WM_TRAYICON = 0x8000 + 1;
     const uint WM_LBUTTONUP = 0x0202;
     const uint WM_RBUTTONUP = 0x0205;
-    const uint WM_COMMAND = 0x0111;
+    const uint WM_CONTEXTMENU = 0x007B;
+    const uint NIN_SELECT = 0x0400;
+    const uint NIN_KEYSELECT = 0x0401;
     const uint WM_NULL = 0x0000;
 
     const uint TPM_RIGHTBUTTON = 0x0002;
@@ -31,6 +32,7 @@ public sealed class TrayMessagePump : IDisposable
 
     public event Action? OpenRequested;
     public event Action? QuitRequested;
+    public event Action? FocusReturnRequested;
 
     public TrayMessagePump(nint hwnd)
     {
@@ -42,14 +44,14 @@ public sealed class TrayMessagePump : IDisposable
 
     nint WndProc(nint hWnd, uint msg, nint wParam, nint lParam)
     {
-        if (msg == WM_TRAYICON)
+        if (msg == TrayInterop.CallbackMessage)
         {
             var eventMsg = (uint)(lParam.ToInt64() & 0xFFFF);
-            if (eventMsg == WM_LBUTTONUP)
+            if (eventMsg is WM_LBUTTONUP or NIN_SELECT or NIN_KEYSELECT)
             {
                 OpenRequested?.Invoke();
             }
-            else if (eventMsg == WM_RBUTTONUP)
+            else if (eventMsg is WM_RBUTTONUP or WM_CONTEXTMENU)
             {
                 ShowContextMenu();
             }
@@ -75,6 +77,7 @@ public sealed class TrayMessagePump : IDisposable
         // Per the Shell_NotifyIcon guidance in docs/research/windows-resident-app.md:
         // send a benign message so the menu closes properly on some Windows versions.
         PostMessage(_hwnd, WM_NULL, 0, 0);
+        FocusReturnRequested?.Invoke();
 
         if (selected == MenuIdOpen) OpenRequested?.Invoke();
         else if (selected == MenuIdQuit) QuitRequested?.Invoke();
