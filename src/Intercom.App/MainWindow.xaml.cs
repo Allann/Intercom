@@ -2,10 +2,11 @@ using Microsoft.UI;
 using Microsoft.UI.Xaml;
 using Microsoft.UI.Windowing;
 using WinRT.Interop;
+using Intercom.Lifecycle;
 
 namespace Intercom.App;
 
-public sealed partial class MainWindow : Window
+public sealed partial class MainWindow : Window, IResidentWindow
 {
     public event Action? QuitRequested;
 
@@ -34,6 +35,7 @@ public sealed partial class MainWindow : Window
 
     public void ShowFromTray()
     {
+        Activate();
         AppWin.Show();
         AppWin.MoveInZOrderAtTop();
     }

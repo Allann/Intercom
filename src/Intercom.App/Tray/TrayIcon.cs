@@ -1,4 +1,5 @@
 using System.Runtime.InteropServices;
+using Intercom.Lifecycle;
 
 namespace Intercom.App.Tray;
 
@@ -7,7 +8,7 @@ namespace Intercom.App.Tray;
 /// research doc), so this talks to the Win32 shell notification API directly against
 /// the main window's HWND.
 /// </summary>
-public sealed class TrayIcon : IDisposable
+public sealed class TrayIcon : ITrayIcon
 {
     const uint NIM_ADD = 0x00000000;
     const uint NIM_MODIFY = 0x00000001;

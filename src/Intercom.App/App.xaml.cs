@@ -1,7 +1,8 @@
 using Microsoft.UI.Xaml;
 using Microsoft.Windows.AppLifecycle;
-using Intercom.App.Diagnostics;
+using Intercom.Diagnostics;
 using Intercom.Identity;
+using Intercom.Lifecycle;
 using Intercom.App.Startup;
 using Intercom.App.Tray;
 
@@ -11,100 +12,59 @@ public partial class App : Application
 {
     static readonly Guid TrayIconGuid = new("6a1f2e2e-6b7a-4a6a-9a1e-8f1c1f6a2b1a");
 
-    MainWindow? _window;
-    TrayIcon? _trayIcon;
-    TrayMessagePump? _trayPump;
-    readonly CrashMarker _crashMarker = new();
-    readonly IdentityStore _identityStore = new();
-    bool _crashNoticePending;
+    readonly AppLifecycle _lifecycle = new(
+        new CrashMarker(),
+        new IdentityStore(),
+        new StartupTaskService(),
+        createWindow: () => new MainWindow(),
+        createTrayPump: hwnd => new TrayMessagePump(hwnd),
+        createTrayIcon: hwnd => new TrayIcon(hwnd, TrayIconGuid));
+
+    Microsoft.UI.Dispatching.DispatcherQueue? _uiDispatcherQueue;
 
     public App()
     {
         InitializeComponent();
+        _lifecycle.QuitRequested += OnQuitRequested;
     }
 
     protected override void OnLaunched(LaunchActivatedEventArgs args)
     {
-        _crashNoticePending = _crashMarker.ClosedUnexpectedlyLastTime();
+        _uiDispatcherQueue = Microsoft.UI.Dispatching.DispatcherQueue.GetForCurrentThread();
 
-        _identityStore.LoadOrCreate();
-        if (_identityStore.IdentityWasRegenerated)
+        var launchedViaStartupTask = Program.InitialActivationArguments.Kind == ExtendedActivationKind.StartupTask;
+        var outcome = _lifecycle.Start(launchedViaStartupTask);
+
+        if (outcome.IdentityWasRegenerated)
         {
             // TODO(#22 pairing ceremony): surface this via the shell UI — every
             // previously approved peer is now unknown and needs re-pairing.
             System.Diagnostics.Debug.WriteLine("Local identity was unreadable and has been regenerated.");
         }
-        else if (_identityStore.RegistryWasReset)
+        else if (outcome.RegistryWasReset)
         {
             // TODO(#22 pairing ceremony): surface this too — the identity is
             // still valid, but the approved-peer list itself was unreadable
             // and every peer now needs re-pairing.
             System.Diagnostics.Debug.WriteLine("Approved-peer registry was unreadable and has been reset.");
         }
-        if (_identityStore.PendingPairingsWereReset)
+        if (outcome.PendingPairingsWereReset)
         {
             System.Diagnostics.Debug.WriteLine("Pending-pairing state was unreadable and has been reset.");
         }
 
-        _window = new MainWindow();
-        _window.QuitRequested += OnQuitRequested;
-
-        _trayPump = new TrayMessagePump(_window.Hwnd);
-        _trayPump.OpenRequested += ShowWindow;
-        _trayPump.QuitRequested += () => _window.Quit();
-        _trayPump.FocusReturnRequested += () => _trayIcon?.SetFocus();
-
-        _trayIcon = new TrayIcon(_window.Hwnd, TrayIconGuid);
-        _trayIcon.Add("Intercom");
-
         Program.RedirectedActivationReceived += OnRedirectedActivation;
-
-        if (Program.InitialActivationArguments.Kind != ExtendedActivationKind.StartupTask)
-        {
-            ShowWindow();
-        }
-
-        _ = TryEnableStartupAsync();
     }
 
     void OnRedirectedActivation(AppActivationArguments args)
     {
-        _window?.DispatcherQueue.TryEnqueue(ShowWindow);
-    }
-
-    void ShowWindow()
-    {
-        if (_window is null) return;
-
-        _window.Activate();
-        _window.ShowFromTray();
-        if (_crashNoticePending)
-        {
-            _window.ShowCrashNotice();
-            _crashNoticePending = false;
-        }
-    }
-
-    async Task TryEnableStartupAsync()
-    {
-        try
-        {
-            // ADR-0003: auto-enable at first run, no prompt. If the user or
-            // policy disables startup later, StartupTask will preserve that state.
-            await new StartupTaskService().EnableOnFirstRunAsync();
-        }
-        catch (Exception ex)
-        {
-            System.Diagnostics.Debug.WriteLine($"StartupTask unavailable: {ex.Message}");
-        }
+        _uiDispatcherQueue?.TryEnqueue(_lifecycle.ShowWindow);
     }
 
     void OnQuitRequested()
     {
         Program.RedirectedActivationReceived -= OnRedirectedActivation;
-        _crashMarker.MarkCleanShutdown();
-        _trayIcon?.Dispose();
-        _trayPump?.Dispose();
+        _lifecycle.Quit();
         Exit();
     }
 }

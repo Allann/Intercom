@@ -1,4 +1,5 @@
 using System.Runtime.InteropServices;
+using Intercom.Lifecycle;
 
 namespace Intercom.App.Tray;
 
@@ -7,7 +8,7 @@ namespace Intercom.App.Tray;
 /// message (WM_TRAYICON) and a simple right-click context menu. WinUI 3 has no
 /// first-party hook for this, so this talks to Win32 directly.
 /// </summary>
-public sealed class TrayMessagePump : IDisposable
+public sealed class TrayMessagePump : ITrayMessagePump
 {
     delegate nint WndProcDelegate(nint hWnd, uint msg, nint wParam, nint lParam);
 

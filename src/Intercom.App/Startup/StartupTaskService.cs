@@ -1,15 +1,7 @@
 using Windows.ApplicationModel;
+using Intercom.Lifecycle;
 
 namespace Intercom.App.Startup;
-
-public enum StartupPreference
-{
-    Enabled,
-    Disabled,
-    DisabledByUser,
-    DisabledByPolicy,
-    Unknown,
-}
 
 /// <summary>
 /// Wraps Windows.ApplicationModel.StartupTask. Per docs/adr/0003 the app enables
@@ -20,7 +12,7 @@ public enum StartupPreference
 /// unpackaged — this is expected until the MSIX packaging pass (ticket #18's
 /// remaining scope) is wired up, not a bug in this class.
 /// </summary>
-public sealed class StartupTaskService
+public sealed class StartupTaskService : IStartupService
 {
     const string TaskId = "IntercomStartupTask";
 

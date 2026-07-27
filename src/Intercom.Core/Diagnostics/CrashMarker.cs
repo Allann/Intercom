@@ -1,4 +1,4 @@
-namespace Intercom.App.Diagnostics;
+namespace Intercom.Diagnostics;
 
 /// <summary>
 /// Manual-relaunch-only crash recovery (ADR-0003): no watchdog, just visibility.
@@ -9,11 +9,10 @@ public sealed class CrashMarker
 {
     readonly string _markerPath;
 
-    public CrashMarker()
+    public CrashMarker(string? appDataDirectory = null)
     {
-        var dir = Path.Combine(
-            Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
-            "Intercom");
+        var dir = appDataDirectory ?? Path.Combine(
+            Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "Intercom");
         Directory.CreateDirectory(dir);
         _markerPath = Path.Combine(dir, "running.marker");
     }
