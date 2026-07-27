@@ -84,4 +84,22 @@ public class PendingPairingRegistryTests
         Assert.True(registry.Complete(peerId));
         Assert.Empty(registry.Pending);
     }
+
+    [Fact]
+    public void ReplaceAll_DeduplicatesByPeerId_KeepingTheMostRecent()
+    {
+        // Deserialized (e.g. loaded from disk) data is untrusted input and
+        // could contain duplicates that should never have been persisted —
+        // ADR-0002 permits only one outstanding request per peer.
+        var peerId = Guid.NewGuid();
+        var registry = new PendingPairingRegistry();
+
+        registry.ReplaceAll([
+            new PendingPairing { PeerId = peerId, StartedAt = Epoch },
+            new PendingPairing { PeerId = peerId, StartedAt = Epoch.AddSeconds(30) },
+        ]);
+
+        Assert.Single(registry.Pending);
+        Assert.Equal(Epoch.AddSeconds(30), registry.Pending[0].StartedAt);
+    }
 }

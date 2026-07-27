@@ -120,4 +120,85 @@ public class IdentityStoreTests : IDisposable
         Assert.Empty(second.PendingPairings.Pending);
         Assert.True(second.PendingPairings.TryStart(peerId, DateTimeOffset.UtcNow));
     }
+
+    [Fact]
+    public void SecondCallOnSameInstance_AfterEarlierRegeneration_StillLoadsRegistry()
+    {
+        // Guards against sticky recovery flags: IdentityWasRegenerated must
+        // reset each call, or a call after a genuinely fine load would skip
+        // registry/pending loading forever because of a PAST regeneration.
+        var store = new IdentityStore(_dir);
+        File.WriteAllBytes(Path.Combine(_dir, "identity.dat"), [1, 2, 3]); // force regeneration on first call
+        store.LoadOrCreate();
+        Assert.True(store.IdentityWasRegenerated);
+
+        var peer = new ApprovedPeer
+        {
+            PeerId = Guid.NewGuid(),
+            FriendlyName = "Someone",
+            SpkiSha256 = new SpkiPin(Enumerable.Repeat((byte)4, 32).ToArray()),
+            Certificate = [1, 2, 3],
+            ApprovedAt = DateTimeOffset.UtcNow,
+        };
+        store.Registry.Add(peer);
+        store.SaveRegistry();
+
+        store.LoadOrCreate(); // second call: identity now loads fine
+
+        Assert.False(store.IdentityWasRegenerated);
+        Assert.Single(store.Registry.Peers); // must actually have loaded the registry this time
+    }
+
+    [Fact]
+    public void RegistryCorruption_OnAlreadyPopulatedStore_ClearsInMemoryBeforePersisting()
+    {
+        // Fail-closed means fail closed even when this instance already has
+        // approvals in memory from an earlier successful call — the stale
+        // in-memory data must not be written back to disk as the "reset" state.
+        var store = new IdentityStore(_dir);
+        store.LoadOrCreate();
+        var peer = new ApprovedPeer
+        {
+            PeerId = Guid.NewGuid(),
+            FriendlyName = "Someone",
+            SpkiSha256 = new SpkiPin(Enumerable.Repeat((byte)5, 32).ToArray()),
+            Certificate = [1, 2, 3],
+            ApprovedAt = DateTimeOffset.UtcNow,
+        };
+        store.Registry.Add(peer);
+        store.SaveRegistry();
+        Assert.Single(store.Registry.Peers);
+
+        File.WriteAllBytes(Path.Combine(_dir, "approved-peers.dat"), [9, 9, 9]);
+        store.LoadOrCreate(); // same instance, still holding the peer in memory
+
+        Assert.True(store.RegistryWasReset);
+        Assert.Empty(store.Registry.Peers);
+
+        // And the file on disk must reflect the cleared state too, not the
+        // stale in-memory peer that existed before this call.
+        var reloaded = new IdentityStore(_dir);
+        reloaded.LoadOrCreate();
+        Assert.Empty(reloaded.Registry.Peers);
+    }
+
+    [Fact]
+    public void PendingPairingCorruption_OnAlreadyPopulatedStore_ClearsInMemoryBeforePersisting()
+    {
+        var store = new IdentityStore(_dir);
+        store.LoadOrCreate();
+        store.PendingPairings.TryStart(Guid.NewGuid(), DateTimeOffset.UtcNow);
+        store.SavePendingPairings();
+        Assert.Single(store.PendingPairings.Pending);
+
+        File.WriteAllBytes(Path.Combine(_dir, "pending-pairings.dat"), [9, 9, 9]);
+        store.LoadOrCreate(); // same instance, still holding the pending request in memory
+
+        Assert.True(store.PendingPairingsWereReset);
+        Assert.Empty(store.PendingPairings.Pending);
+
+        var reloaded = new IdentityStore(_dir);
+        reloaded.LoadOrCreate();
+        Assert.Empty(reloaded.PendingPairings.Pending);
+    }
 }

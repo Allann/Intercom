@@ -33,9 +33,19 @@ public sealed class PendingPairingRegistry
     public int RemoveExpired(DateTimeOffset now) =>
         _pending.RemoveAll(p => p.IsExpired(ExpiryTimeout, now));
 
+    /// <summary>
+    /// Enforces the one-outstanding-request-per-peer invariant on the way in,
+    /// not just on the way out via TryStart — deserialized data (e.g. loaded
+    /// from disk) is untrusted input and could contain duplicates that never
+    /// should have been persisted. Keeps only the most recent request per
+    /// peer; older duplicates are discarded.
+    /// </summary>
     internal void ReplaceAll(IEnumerable<PendingPairing> pending)
     {
         _pending.Clear();
-        _pending.AddRange(pending);
+        _pending.AddRange(
+            pending
+                .GroupBy(p => p.PeerId)
+                .Select(g => g.OrderByDescending(p => p.StartedAt).First()));
     }
 }

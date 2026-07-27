@@ -64,6 +64,15 @@ public sealed class IdentityStore
 
     public void LoadOrCreate()
     {
+        // Reset every time: this instance is not guaranteed to be used only
+        // once. Without this, a flag that became true on an earlier call
+        // would stay true forever — and since registry/pending loading below
+        // is gated on IdentityWasRegenerated being false, a single past
+        // regeneration would silently skip loading them on every later call.
+        IdentityWasRegenerated = false;
+        RegistryWasReset = false;
+        PendingPairingsWereReset = false;
+
         var identityExistedBefore = File.Exists(_identityPath);
         var registryExistedBefore = File.Exists(_registryPath);
         var pendingExistedBefore = File.Exists(_pendingPairingPath);
@@ -103,6 +112,11 @@ public sealed class IdentityStore
             else if (registryExistedBefore)
             {
                 RegistryWasReset = true;
+                // Fail closed: clear whatever this instance had in memory
+                // (e.g. from an earlier successful call) before persisting the
+                // replacement — otherwise stale in-memory approvals would be
+                // written back to disk as if they were the reset state.
+                Registry.ReplaceAll([]);
                 // Replace the corrupt file immediately rather than leaving it
                 // to fail the same way on every future launch.
                 PersistRegistry(Registry.Peers);
@@ -116,6 +130,7 @@ public sealed class IdentityStore
             else if (pendingExistedBefore)
             {
                 PendingPairingsWereReset = true;
+                PendingPairings.ReplaceAll([]); // same fail-closed reasoning as the registry above
             }
 
             // Prune expired requests on every load (ADR-0002: 2-minute expiry
