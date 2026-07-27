@@ -65,6 +65,8 @@ public partial class App : Application
             System.Diagnostics.Debug.WriteLine("Pending-pairing state was unreadable and has been reset.");
         }
 
+        _mainWindow?.AttachIdentityStore(_lifecycle.IdentityStore);
+
         StartDiscovery();
 
         Program.RedirectedActivationReceived += OnRedirectedActivation;

@@ -3,7 +3,9 @@ using Microsoft.UI.Xaml;
 using Microsoft.UI.Windowing;
 using WinRT.Interop;
 using Intercom.Discovery;
+using Intercom.Identity;
 using Intercom.Lifecycle;
+using Intercom.App.Pairing;
 
 namespace Intercom.App;
 
@@ -13,6 +15,8 @@ public sealed partial class MainWindow : Window, IResidentWindow
 
     public nint Hwnd { get; }
     public AppWindow AppWin { get; }
+
+    IdentityStore? _identityStore;
 
     public MainWindow()
     {
@@ -66,5 +70,21 @@ public sealed partial class MainWindow : Window, IResidentWindow
     {
         var endpoints = string.Join(", ", peer.Endpoints.Select(e => $"{e.Address}:{e.Port} ({e.InterfaceId})"));
         return $"{peer.PeerIdHint} — v{peer.ProtocolVersion} — {endpoints}";
+    }
+
+    /// <summary>Issue #22: gives this window access to the real
+    /// <see cref="IdentityStore"/> so "+ Add Family Member" can open a
+    /// pairing dialog backed by real data. Called once from App.OnLaunched,
+    /// after AppLifecycle.Start has loaded the store — not passed through
+    /// the constructor, since <see cref="Intercom.Lifecycle.AppLifecycle"/>'s
+    /// window factory is a parameterless <c>Func&lt;IResidentWindow&gt;</c>.</summary>
+    public void AttachIdentityStore(IdentityStore identityStore) => _identityStore = identityStore;
+
+    async void OnAddFamilyMemberClick(object sender, RoutedEventArgs e)
+    {
+        if (_identityStore is null) return;
+
+        var dialog = new PairingDialog(_identityStore) { XamlRoot = Content.XamlRoot };
+        await dialog.ShowAsync();
     }
 }

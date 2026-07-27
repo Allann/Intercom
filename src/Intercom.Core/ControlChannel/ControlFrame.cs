@@ -17,6 +17,34 @@ public enum ControlMessageType : ushort
     /// CorrelationId is the MessageId of the frame it acknowledges. Distinct
     /// from attention-card Acknowledged, which is out of scope here (#25).</summary>
     Delivered = 2,
+
+    /// <summary>Issue #22: carries one side's fresh pairing nonce, claimed
+    /// peer ID, protocol version, and pairing intent
+    /// (docs/research/pairing-security.md step 1). Permitted on a
+    /// <see cref="ConnectionTrust.PairingOnly"/> connection — see
+    /// <see cref="FrameDispatcher.IsPairingPermitted"/>. Encoded/decoded by
+    /// <c>Intercom.Pairing.PairingFrameCodec</c>.</summary>
+    PairingNonce = 3,
+
+    /// <summary>Issue #22: "the codes match" — sent once the local user
+    /// stamps a postcard approved. Empty payload; the frame's own MessageId
+    /// is the only thing that matters. Permitted on
+    /// <see cref="ConnectionTrust.PairingOnly"/>.</summary>
+    PairingConfirm = 4,
+
+    /// <summary>Issue #22: an explicit, immediate reject (ADR-0002 — distinct
+    /// from letting the 2-minute window lapse). Empty payload. Permitted on
+    /// <see cref="ConnectionTrust.PairingOnly"/>.</summary>
+    PairingReject = 5,
+
+    /// <summary>Issue #22: best-effort "I forgot you" notice (ADR-0002),
+    /// sent only if the connection happens to be live at that instant — no
+    /// queued/guaranteed delivery. Sent over an already-<see
+    /// cref="ConnectionTrust.Approved"/> connection (the peer being forgotten
+    /// was, by definition, previously approved), so it needs no
+    /// <see cref="FrameDispatcher.IsPairingPermitted"/> entry — Approved
+    /// connections already accept every message type.</summary>
+    Forgotten = 6,
 }
 
 /// <summary>

@@ -38,6 +38,12 @@ public sealed class AppLifecycle
     /// it.</summary>
     public LocalIdentity Identity => _identityStore.Identity;
 
+    /// <summary>The full identity store (identity, approved peers, pending
+    /// pairings) — issue #22's pairing UI needs the whole store, not just
+    /// the local identity, to drive the Postcard Badges/Rolodex flow against
+    /// real data.</summary>
+    public IdentityStore IdentityStore => _identityStore;
+
     public AppLifecycle(
         CrashMarker crashMarker,
         IdentityStore identityStore,

@@ -39,9 +39,30 @@ public sealed class IdentityStore
     readonly ApprovedPeerRegistry _registry = new();
     readonly PendingPairingRegistry _pendingPairings = new();
 
+    // Issue #22 introduced the first callers that can legitimately mutate
+    // this store from more than one thread at once: a pairing ceremony's
+    // frame-received handling runs on a control-channel receive-loop
+    // thread, while the UI thread can simultaneously start a new ceremony,
+    // rename, or forget a peer. Every public method that reads or mutates
+    // _registry/_pendingPairings (and their paired on-disk file) takes this
+    // lock for its entire body — never across an await, since none of these
+    // methods are async. LoadOrCreate is the one exception: it runs once,
+    // before any other caller has a reference to this instance, so it needs
+    // no lock of its own.
+    readonly object _gate = new();
+
     public LocalIdentity Identity { get; private set; } = null!;
-    public IReadOnlyList<ApprovedPeer> ApprovedPeers => _registry.Peers;
-    public IReadOnlyList<PendingPairing> PendingPairings => _pendingPairings.Pending;
+
+    /// <summary>A point-in-time snapshot, not a live view — taken under the
+    /// same gate every mutator uses, so a caller enumerating this from one
+    /// thread (e.g. the UI thread rendering the Rolodex) can never observe a
+    /// torn/mid-mutation state or throw from concurrent modification while a
+    /// pairing ceremony on another thread calls <see cref="Approve"/> or
+    /// <see cref="Forget"/>.</summary>
+    public IReadOnlyList<ApprovedPeer> ApprovedPeers { get { lock (_gate) { return _registry.Peers.ToList(); } } }
+
+    /// <summary>Same snapshot semantics as <see cref="ApprovedPeers"/>.</summary>
+    public IReadOnlyList<PendingPairing> PendingPairings { get { lock (_gate) { return _pendingPairings.Pending.ToList(); } } }
 
     /// <summary>True only when a previously-existing identity could not be
     /// read (corrupted) or had expired — i.e. something was actually lost and
@@ -173,15 +194,38 @@ public sealed class IdentityStore
     }
 
     /// <summary>Fail-closed lookup: never returns a revoked peer as approved.</summary>
-    public ApprovedPeer? FindApprovedBySpki(SpkiPin spkiSha256) => _registry.FindApprovedBySpki(spkiSha256);
+    public ApprovedPeer? FindApprovedBySpki(SpkiPin spkiSha256)
+    {
+        lock (_gate) { return _registry.FindApprovedBySpki(spkiSha256); }
+    }
 
     /// <summary>Adds the peer to the approved registry and persists atomically —
     /// callers never need to remember a separate save step.</summary>
     public ApprovedPeer Approve(ApprovedPeer peer)
     {
-        _registry.Add(peer);
-        PersistRegistry(_registry.Peers);
-        return peer;
+        lock (_gate)
+        {
+            _registry.Add(peer);
+            PersistRegistry(_registry.Peers);
+            return peer;
+        }
+    }
+
+    /// <summary>Renames an approved (or previously-approved/revoked) peer's
+    /// display name and persists atomically. Never touches trust — renaming
+    /// is presentation metadata only, per ADR-0002 (approval is pinned by
+    /// SPKI hash, never by friendly name). False, with no write, if the peer
+    /// is unknown.</summary>
+    public bool Rename(Guid peerId, string friendlyName)
+    {
+        lock (_gate)
+        {
+            var peer = _registry.Peers.FirstOrDefault(p => p.PeerId == peerId);
+            if (peer is null) return false;
+            peer.FriendlyName = friendlyName;
+            PersistRegistry(_registry.Peers);
+            return true;
+        }
     }
 
     /// <summary>Revokes the peer's approval (ADR-0002: pin/cert/contact
@@ -190,9 +234,12 @@ public sealed class IdentityStore
     /// revoked.</summary>
     public bool Forget(Guid peerId)
     {
-        if (!_registry.Forget(peerId)) return false;
-        PersistRegistry(_registry.Peers);
-        return true;
+        lock (_gate)
+        {
+            if (!_registry.Forget(peerId)) return false;
+            PersistRegistry(_registry.Peers);
+            return true;
+        }
     }
 
     /// <summary>Starts a pairing ceremony for the peer and persists
@@ -201,27 +248,36 @@ public sealed class IdentityStore
     /// peer identity).</summary>
     public bool StartPairing(Guid peerId, DateTimeOffset now)
     {
-        if (!_pendingPairings.TryStart(peerId, now)) return false;
-        PersistPendingPairings(_pendingPairings.Pending);
-        return true;
+        lock (_gate)
+        {
+            if (!_pendingPairings.TryStart(peerId, now)) return false;
+            PersistPendingPairings(_pendingPairings.Pending);
+            return true;
+        }
     }
 
     /// <summary>Completes (removes) the peer's pending pairing request and
     /// persists atomically. False, with no write, if none was outstanding.</summary>
     public bool CompletePairing(Guid peerId)
     {
-        if (!_pendingPairings.Complete(peerId)) return false;
-        PersistPendingPairings(_pendingPairings.Pending);
-        return true;
+        lock (_gate)
+        {
+            if (!_pendingPairings.Complete(peerId)) return false;
+            PersistPendingPairings(_pendingPairings.Pending);
+            return true;
+        }
     }
 
     /// <summary>Drops expired pending requests (ADR-0002: no trust-state
     /// change results) and persists atomically if anything was dropped.</summary>
     public int PruneExpiredPairings(DateTimeOffset now)
     {
-        var prunedCount = _pendingPairings.RemoveExpired(now);
-        if (prunedCount > 0) PersistPendingPairings(_pendingPairings.Pending);
-        return prunedCount;
+        lock (_gate)
+        {
+            var prunedCount = _pendingPairings.RemoveExpired(now);
+            if (prunedCount > 0) PersistPendingPairings(_pendingPairings.Pending);
+            return prunedCount;
+        }
     }
 
     LocalIdentity? TryLoadIdentity()

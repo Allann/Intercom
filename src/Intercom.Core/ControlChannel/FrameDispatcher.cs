@@ -12,10 +12,9 @@ namespace Intercom.ControlChannel;
 /// accepted twice — everything else is rejected until Hello has been seen
 /// once.</item>
 /// <item>A <see cref="ConnectionTrust.PairingOnly"/> connection rejects every
-/// message type except whatever pairing needs. No pairing message types
-/// exist yet (issue #22), so today that means only Hello is ever accepted on
-/// such a connection — this is the seam #22 extends, not a hardcoded
-/// "reject everything" with no way in.</item>
+/// message type except whatever pairing needs — Hello plus the pairing
+/// ceremony messages added in issue #22 (see
+/// <see cref="IsPairingPermitted"/>).</item>
 /// </list>
 /// </summary>
 public sealed class FrameDispatcher
@@ -85,5 +84,6 @@ public sealed class FrameDispatcher
         return true;
     }
 
-    static bool IsPairingPermitted(ControlMessageType type) => type == ControlMessageType.Hello;
+    static bool IsPairingPermitted(ControlMessageType type) => type is ControlMessageType.Hello
+        or ControlMessageType.PairingNonce or ControlMessageType.PairingConfirm or ControlMessageType.PairingReject;
 }

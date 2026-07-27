@@ -21,5 +21,9 @@
             Text="No peers discovered yet."
             Opacity="0.7" />
         <ListView x:Name="DiscoveredPeersList" MaxHeight="200" />
+
+        <!-- Issue #22: Postcard Badges pairing ceremony + Rolodex, opened as
+             a modal over the shell, per docs/mvp-specification.md §7. -->
+        <Button x:Name="AddFamilyMemberButton" Content="+ Add Family Member" Margin="0,16,0,0" Click="OnAddFamilyMemberClick" />
     </StackPanel>
 </Window>

@@ -1,0 +1,42 @@
+<ContentDialog
+    x:Class="Intercom.App.Pairing.PairingDialog"
+    xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+    xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+    Title="Postcards From the Network"
+    CloseButtonText="Close"
+    DefaultButton="Close"
+    Background="#FFF4E8CE">
+
+    <!-- Postcard Badges pairing flow (issue #7 prototype, ADR-0002, issue #22).
+         Deliberately plain code-behind, no data-binding/MVVM infrastructure:
+         the "card deck" and "Rolodex" panels below are populated and refreshed
+         imperatively from PairingDialog.xaml.cs, the same convention
+         MainWindow.UpdateDiscoveredPeers already uses. -->
+    <ScrollViewer MaxHeight="560" MinWidth="480">
+        <StackPanel Spacing="12" Padding="4">
+            <TextBlock
+                Text="Every discovered device arrives as an illustrated postcard. Match the wax seals, stamp it approved, or tear it up."
+                TextWrapping="Wrap"
+                Opacity="0.8"
+                FontSize="12" />
+
+            <Button x:Name="SimulateRequestButton" Content="Simulate a new pairing request" Click="OnSimulateRequestClick" />
+
+            <TextBlock
+                Text="No two real devices are available in this environment, so &quot;Simulate&quot; runs a real ceremony (real nonces, real transcript, real six-digit code, real IdentityStore.Approve) against an in-memory stand-in for the second device."
+                TextWrapping="Wrap"
+                Opacity="0.65"
+                FontSize="11" />
+
+            <TextBlock Text="Postcards" FontWeight="Bold" FontSize="16" Foreground="#FFB6502F" />
+            <StackPanel x:Name="PostcardDeckPanel" Orientation="Horizontal" Spacing="12" />
+            <TextBlock x:Name="NoPostcardsNotice" Text="No pairing requests in progress." Opacity="0.7" />
+
+            <Rectangle Height="2" Fill="#FF2B1D14" Opacity="0.3" Margin="0,8,0,0" />
+
+            <TextBlock Text="Rolodex — already approved" FontWeight="Bold" FontSize="16" Foreground="#FF1F4D4A" />
+            <StackPanel x:Name="RolodexPanel" Spacing="8" />
+            <TextBlock x:Name="NoApprovedPeersNotice" Text="No approved peers yet." Opacity="0.7" />
+        </StackPanel>
+    </ScrollViewer>
+</ContentDialog>
