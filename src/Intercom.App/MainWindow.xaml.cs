@@ -2,6 +2,7 @@ using Microsoft.UI;
 using Microsoft.UI.Xaml;
 using Microsoft.UI.Windowing;
 using WinRT.Interop;
+using Intercom.Discovery;
 using Intercom.Lifecycle;
 
 namespace Intercom.App;
@@ -49,5 +50,21 @@ public sealed partial class MainWindow : Window, IResidentWindow
     {
         AppWin.Closing -= OnAppWindowClosing;
         QuitRequested?.Invoke();
+    }
+
+    /// <summary>Issue #20's entire UI surface: the raw "visible, unapproved"
+    /// list, for confirming discovery actually works on real hardware. No
+    /// approve/connect affordance — that's #21/#22. Must be called on the UI
+    /// thread.</summary>
+    public void UpdateDiscoveredPeers(IReadOnlyList<VisiblePeer> peers)
+    {
+        NoDiscoveredPeersNotice.Visibility = peers.Count == 0 ? Visibility.Visible : Visibility.Collapsed;
+        DiscoveredPeersList.ItemsSource = peers.Select(DescribePeer).ToList();
+    }
+
+    static string DescribePeer(VisiblePeer peer)
+    {
+        var endpoints = string.Join(", ", peer.Endpoints.Select(e => $"{e.Address}:{e.Port} ({e.InterfaceId})"));
+        return $"{peer.PeerIdHint} — v{peer.ProtocolVersion} — {endpoints}";
     }
 }

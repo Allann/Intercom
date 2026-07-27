@@ -31,6 +31,13 @@ public sealed class AppLifecycle
     /// Quit() has torn things down.</summary>
     public event Action? QuitRequested;
 
+    /// <summary>This device's local identity, loaded by <see cref="Start"/>.
+    /// Exposed so callers that need PeerId (e.g. wiring up discovery) don't
+    /// have to keep a second IdentityStore around — there is exactly one
+    /// identity per app instance, and AppLifecycle already owns loading
+    /// it.</summary>
+    public LocalIdentity Identity => _identityStore.Identity;
+
     public AppLifecycle(
         CrashMarker crashMarker,
         IdentityStore identityStore,

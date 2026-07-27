@@ -12,5 +12,14 @@
             IsClosable="True" />
         <TextBlock Text="Intercom" FontSize="24" FontWeight="Bold" />
         <TextBlock Text="App shell scaffolding placeholder (issue #18)" />
+
+        <!-- Issue #20: visible-but-unapproved local peers only. No approve/
+             connect action here — that's #21/#22. -->
+        <TextBlock Text="Discovered on this network" FontWeight="SemiBold" Margin="0,16,0,0" />
+        <TextBlock
+            x:Name="NoDiscoveredPeersNotice"
+            Text="No peers discovered yet."
+            Opacity="0.7" />
+        <ListView x:Name="DiscoveredPeersList" MaxHeight="200" />
     </StackPanel>
 </Window>
