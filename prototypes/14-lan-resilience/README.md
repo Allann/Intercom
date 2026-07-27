@@ -29,6 +29,29 @@ dotnet run
 Type `help` for the command list. The full state prints after every command,
 per the standard prototype rule of surfacing state on every action.
 
+## State modeling
+
+`ConnState` is a closed type hierarchy (one record per state), not an enum
+plus loose fields — following the
+[`making-illegal-states-unrepresentable`](file:///M:/allan-skills/skills/engineering/making-illegal-states-unrepresentable/SKILL.md)
+approach. Two things this fixed for real, not just hypothetically:
+
+- **Heartbeat timestamps live only on `Connected`/`Reconnecting`.** There's no
+  nullable `LastHeartbeatAtSecond` field sitting on the whole simulation that
+  happens to be meaningless in four of the six states.
+- **`Asleep(Was)` is a distinct state that wraps what it interrupted**, not a
+  separate `bool _localAsleep` living alongside `_state`. The first version of
+  this prototype had exactly that bug: `sleep` set the bool but moved `_state`
+  to `Reconnecting`, and a subsequent `wifi-change` command only checked
+  `_state == Connected` and never looked at the bool — so `wifi-change` while
+  asleep silently produced `Discovered` with `_localAsleep` still `true`, an
+  incoherent combination that should never exist. Folding sleep into the state
+  type made that combination impossible to construct: `Asleep` doesn't
+  implement `IAwakeState`, so every other transition's pattern match on
+  `IAwakeState` simply doesn't match while asleep, and `wifi-change`/`connect`/
+  etc. now correctly print `'wifi-change' ignored: the local PC is asleep`
+  instead of silently corrupting state.
+
 ## What it proves
 
 - Discovery is visibility only — `discover` never jumps straight to `Connected`.
