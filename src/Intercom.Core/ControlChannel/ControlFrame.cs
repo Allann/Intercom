@@ -66,6 +66,35 @@ public enum ControlMessageType : ushort
     /// an already-<see cref="ConnectionTrust.Approved"/> connection. Encoded/
     /// decoded by <c>Intercom.Chat.ChatFrameCodec</c>.</summary>
     Chat = 8,
+
+    /// <summary>Issue #25: one attention card (purpose text + emoji icon) to
+    /// a specific approved peer (this ticket is not group cards — #29/#30's
+    /// job). Gets the mechanical <see cref="Delivered"/> receipt for free
+    /// from <see cref="FrameDispatcher"/> like every other non-meta message
+    /// type, exactly like <see cref="Chat"/> — that mechanical receipt is
+    /// deliberately distinct from <see cref="Acknowledged"/> below (ADR-0001:
+    /// "Acknowledged is sent only for attention cards, when a human actually
+    /// acts on it"). Sent only over an already-<see cref="ConnectionTrust.Approved"/>
+    /// connection. Encoded/decoded by
+    /// <c>Intercom.AttentionCards.AttentionCardFrameCodec</c>.</summary>
+    AttentionCard = 9,
+
+    /// <summary>Issue #25: the human-triggered acknowledgement of one
+    /// specific attention card — ADR-0001's "Acknowledged is sent ONLY for
+    /// attention cards, ONLY when a human actually acts on it (never
+    /// automatic, unlike Delivered)". Its CorrelationId is the MessageId of
+    /// the <see cref="AttentionCard"/> frame it acknowledges — same shape as
+    /// <see cref="Delivered"/>'s CorrelationId convention, but sent
+    /// explicitly by application code (<c>Intercom.AttentionCards.AttentionCardService.AcknowledgeAsync</c>)
+    /// rather than mechanically by <see cref="FrameDispatcher"/>. Empty
+    /// payload — like <see cref="Delivered"/>, the CorrelationId is the only
+    /// thing that matters. Like every other non-meta message type, an
+    /// inbound Acknowledged frame still gets its own mechanical Delivered
+    /// receipt in turn (ADR-0001 applies to every message with a message ID,
+    /// with no special exception for receipts-of-receipts beyond the
+    /// Hello/Delivered meta-messages <see cref="FrameDispatcher"/> already
+    /// excludes).</summary>
+    Acknowledged = 10,
 }
 
 /// <summary>

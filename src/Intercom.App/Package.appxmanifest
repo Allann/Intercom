@@ -3,8 +3,9 @@
   xmlns="http://schemas.microsoft.com/appx/manifest/foundation/windows10"
   xmlns:uap="http://schemas.microsoft.com/appx/manifest/uap/windows10"
   xmlns:desktop="http://schemas.microsoft.com/appx/manifest/desktop/windows10"
+  xmlns:com="http://schemas.microsoft.com/appx/manifest/com/windows10"
   xmlns:rescap="http://schemas.microsoft.com/appx/manifest/foundation/windows10/restrictedcapabilities"
-  IgnorableNamespaces="uap desktop rescap">
+  IgnorableNamespaces="uap desktop com rescap">
 
   <Identity
     Name="Allann.Intercom"
@@ -51,6 +52,25 @@
             Enabled="false"
             DisplayName="Intercom" />
         </desktop:Extension>
+
+        <!-- Issue #25: registers this app as a target for native
+             AppNotificationManager toast activation (Microsoft Learn's
+             "Quickstart: Send and Handle App Notifications" — this manifest
+             step is required even for a packaged/MSIX app like this one, not
+             just unpackaged apps). See
+             Intercom.App.AttentionCards.AttentionCardToastPresenter's class
+             doc for the known Program.cs bootstrap-ordering caveat this
+             registration is subject to. -->
+        <desktop:Extension Category="windows.toastNotificationActivation">
+          <desktop:ToastNotificationActivation ToastActivatorCLSID="8040678C-3DA5-4705-B15B-6EFBC4EBF409" />
+        </desktop:Extension>
+        <com:Extension Category="windows.comServer">
+          <com:ComServer>
+            <com:ExeServer Executable="Intercom.App.exe" DisplayName="Intercom" Arguments="----AppNotificationActivated:">
+              <com:Class Id="8040678C-3DA5-4705-B15B-6EFBC4EBF409" />
+            </com:ExeServer>
+          </com:ComServer>
+        </com:Extension>
       </Extensions>
     </Application>
   </Applications>

@@ -1,16 +1,19 @@
 using Microsoft.UI;
 using Microsoft.UI.Dispatching;
+using Microsoft.UI.Text;
 using Microsoft.UI.Xaml;
 using Microsoft.UI.Xaml.Controls;
 using Microsoft.UI.Xaml.Media;
 using Microsoft.UI.Windowing;
 using Windows.UI;
 using WinRT.Interop;
+using Intercom.AttentionCards;
 using Intercom.Chat;
 using Intercom.Discovery;
 using Intercom.Identity;
 using Intercom.Lifecycle;
 using Intercom.Presence;
+using Intercom.App.AttentionCards;
 using Intercom.App.Chat;
 using Intercom.App.Pairing;
 
@@ -50,6 +53,14 @@ public sealed partial class MainWindow : Window, IResidentWindow
     ChatService? _chatServiceLocal;
     ChatService? _chatServicePeer;
 
+    // ---- Issue #25: attention cards ----
+    const string CustomComposerPresetLabel = "Custom…";
+
+    AttentionCardService? _attentionCardServiceLocal;
+    AttentionCardService? _attentionCardServicePeer;
+    AttentionCardToastPresenter? _attentionCardToastPresenter;
+    string _selectedComposerIcon = AttentionCardPresets.Presets[0].Icon;
+
     // There is no live multi-peer connection roster in this app shell yet
     // (see MainWindow.xaml's chat drawer comment) — this Guid stands in for
     // "the approved peer this drawer is talking to" purely so the per-peer
@@ -86,6 +97,7 @@ public sealed partial class MainWindow : Window, IResidentWindow
         AppWin.Closing += OnAppWindowClosing;
 
         InitializeChatDrawer();
+        InitializeAttentionCardShelf();
     }
 
     void OnAppWindowClosing(AppWindow sender, AppWindowClosingEventArgs args)
@@ -361,6 +373,268 @@ public sealed partial class MainWindow : Window, IResidentWindow
             ChatDeliveryState.Pending => "sending...",
             ChatDeliveryState.Delivered => "delivered",
             ChatDeliveryState.Undelivered => "undelivered",
+            _ => "",
+        };
+    }
+
+    // ---- Issue #25: attention-card composer + shelf ----
+
+    /// <summary>Gives this window access to the real
+    /// <see cref="AttentionCardToastPresenter"/> so an inbound card (past the
+    /// DND chime gate — see <see cref="OnIncomingAttentionCard"/>) can show a
+    /// real native toast. Called once from App.OnLaunched, mirroring
+    /// <see cref="AttachChat"/>. The send/receive/Ack pipeline itself is
+    /// already running by this point — see <see cref="InitializeAttentionCardShelf"/>,
+    /// called unconditionally from the constructor exactly like
+    /// <see cref="InitializeChatDrawer"/>, since it needs no external
+    /// dependency to exist.</summary>
+    public void AttachAttentionCards(AttentionCardToastPresenter toastPresenter) => _attentionCardToastPresenter = toastPresenter;
+
+    /// <summary>Wires up a real <see cref="AttentionCardService"/> pipeline
+    /// (real <see cref="AttentionCardFrameCodec"/> encode/decode, real
+    /// <see cref="AttentionCardConversation"/> delivery-/ack-state
+    /// bookkeeping, real mechanical Delivered receipts AND real explicit
+    /// Acknowledged receipts via <see cref="FrameDispatcher"/>) against an
+    /// in-process <see cref="LoopbackAttentionCardTransport"/> pair — no live
+    /// multi-peer connection roster exists in this app shell yet (the same
+    /// gap #23/#24's reports flagged), so this is the same honest
+    /// "recipient select has exactly one demo peer" constraint #22/#24 hit,
+    /// not a pretense of a real roster. <c>_attentionCardServiceLocal</c> is
+    /// "this device"; <c>_attentionCardServicePeer</c> exists purely so the
+    /// demo button can make the simulated peer actually send real frames
+    /// back.</summary>
+    void InitializeAttentionCardShelf()
+    {
+        var (localTransport, peerTransport) = LoopbackAttentionCardTransport.CreatePair();
+        _attentionCardServiceLocal = new AttentionCardService(localTransport);
+        _attentionCardServicePeer = new AttentionCardService(peerTransport);
+
+        _attentionCardServiceLocal.CardReceived += OnIncomingAttentionCard;
+        _attentionCardServiceLocal.Conversation.CardAdded += _ => _dispatcherQueue.TryEnqueue(RenderAttentionCardShelf);
+        _attentionCardServiceLocal.Conversation.CardUpdated += _ => _dispatcherQueue.TryEnqueue(RenderAttentionCardShelf);
+
+        RenderComposerPresets();
+        RenderEmojiPicker();
+        RenderAttentionCardShelf();
+    }
+
+    void OnIncomingAttentionCard(AttentionCard card)
+    {
+        // CardReceived can in principle fire off the UI thread (a real
+        // PeerControlChannel's receive loop is not the UI thread) — mirrors
+        // OnIncomingChatMessage's identical caution, even though the
+        // loopback demo happens to call back synchronously today.
+        _dispatcherQueue.TryEnqueue(() =>
+        {
+            var dndEnabled = _dndSettings?.DndEnabled ?? false;
+
+            // Issue #25 acceptance criterion: "DND produces no chime/toast
+            // while still queuing the item silently." The card itself is
+            // already unconditionally in the conversation by this point
+            // (AttentionCardService.OnFrameReceived never checks DND, and
+            // RenderAttentionCardShelf above already re-rendered it into the
+            // shelf via CardAdded) — only the native-toast CREATION below is
+            // gated, reusing the exact same DndPolicy predicate/InteractionKind
+            // OnIncomingChatMessage uses for the chat chime.
+            if (DndPolicy.IsSuppressed(dndEnabled, InteractionKind.AttentionChime)) return;
+
+            _attentionCardToastPresenter?.Show(card, fromLabel: "the demo peer");
+        });
+    }
+
+    /// <summary>Called by App.xaml.cs when a native toast's Acknowledge
+    /// button was clicked — deliberately never shows/activates this window,
+    /// satisfying "action activation sends exactly one acknowledgement
+    /// without forcing the main window open." The card being acknowledged
+    /// is always one THIS device received (see
+    /// <see cref="AttentionCardService.AcknowledgeAsync"/>'s own
+    /// sent-card guard), so this always targets <c>_attentionCardServiceLocal</c>,
+    /// never the demo peer service.</summary>
+    public Task AcknowledgeAttentionCardAsync(Guid cardMessageId, CancellationToken cancellationToken) =>
+        _attentionCardServiceLocal?.AcknowledgeAsync(cardMessageId, cancellationToken) ?? Task.CompletedTask;
+
+    void RenderComposerPresets()
+    {
+        var items = AttentionCardPresets.Presets.Select(p => p.Purpose).ToList();
+        items.Add(CustomComposerPresetLabel);
+        ComposerPresetCombo.ItemsSource = items;
+        ComposerPresetCombo.SelectedIndex = 0;
+    }
+
+    void OnComposerPresetChanged(object sender, SelectionChangedEventArgs e)
+    {
+        var isCustom = ComposerPresetCombo.SelectedItem as string == CustomComposerPresetLabel;
+        ComposerCustomTextBox.Visibility = isCustom ? Visibility.Visible : Visibility.Collapsed;
+        if (!isCustom && ComposerPresetCombo.SelectedIndex >= 0 && ComposerPresetCombo.SelectedIndex < AttentionCardPresets.Presets.Count)
+        {
+            SetSelectedComposerIcon(AttentionCardPresets.Presets[ComposerPresetCombo.SelectedIndex].Icon);
+        }
+    }
+
+    /// <summary>The icon picker — issue #25's explicit "32x32 touch targets"
+    /// sizing requirement, one button per <see cref="AttentionCardPresets.IconChoices"/>
+    /// entry (intercom-shell-prototype.html's #emoji-grid). Available for
+    /// BOTH a preset (as an override) and a Custom card (as the only way to
+    /// pick an icon at all).</summary>
+    void RenderEmojiPicker()
+    {
+        EmojiPickerPanel.Children.Clear();
+        foreach (var icon in AttentionCardPresets.IconChoices)
+        {
+            var isSelected = icon == _selectedComposerIcon;
+            var button = new Button
+            {
+                Content = icon,
+                Width = 32,
+                Height = 32,
+                Padding = new Thickness(0),
+                FontSize = 16,
+                Background = isSelected ? Mustard : Paper,
+                Foreground = Ink,
+                BorderBrush = Ink,
+                BorderThickness = new Thickness(2),
+            };
+            button.Click += (_, _) => SetSelectedComposerIcon(icon);
+            EmojiPickerPanel.Children.Add(button);
+        }
+    }
+
+    void SetSelectedComposerIcon(string icon)
+    {
+        _selectedComposerIcon = icon;
+        RenderEmojiPicker();
+    }
+
+    void OnSendAttentionCardClick(object sender, RoutedEventArgs e) => _ = SendAttentionCardAsync();
+
+    async Task SendAttentionCardAsync()
+    {
+        if (_attentionCardServiceLocal is null) return;
+
+        var isCustom = ComposerPresetCombo.SelectedItem as string == CustomComposerPresetLabel;
+        var purpose = isCustom ? ComposerCustomTextBox.Text.Trim() : ComposerPresetCombo.SelectedItem as string ?? "";
+        if (string.IsNullOrWhiteSpace(purpose)) return;
+
+        try
+        {
+            await _attentionCardServiceLocal.SendAsync(purpose, _selectedComposerIcon, CancellationToken.None);
+        }
+        catch
+        {
+            // Already reflected as Undelivered in the conversation by
+            // AttentionCardService itself (ADR-0001: no auto-resend) —
+            // nothing further to do here beyond not crashing the UI thread.
+        }
+
+        if (isCustom) ComposerCustomTextBox.Text = "";
+    }
+
+    void OnSimulatePeerAttentionCardClick(object sender, RoutedEventArgs e)
+    {
+        if (_attentionCardServicePeer is null) return;
+        var preset = AttentionCardPresets.Presets[0];
+        _ = _attentionCardServicePeer.SendAsync(preset.Purpose, preset.Icon, CancellationToken.None);
+    }
+
+    void OnSimulateAttentionCardDropClick(object sender, RoutedEventArgs e)
+    {
+        // Demonstrates the same "in-flight send when the connection drops
+        // shows undelivered, no silent auto-resend" behavior as chat's
+        // identical demo button — a loopback pair has no real socket to
+        // actually sever (see LoopbackAttentionCardTransport.SimulateDrop).
+        _attentionCardServiceLocal?.Conversation.MarkAllPendingUndelivered();
+    }
+
+    void RenderAttentionCardShelf()
+    {
+        if (_attentionCardServiceLocal is null) return;
+
+        var cards = _attentionCardServiceLocal.Conversation.Cards;
+        NoAttentionCardsNotice.Visibility = cards.Count == 0 ? Visibility.Visible : Visibility.Collapsed;
+
+        AttentionCardShelfPanel.Children.Clear();
+        // Newest first, matching the composer sitting logically "after" the
+        // most recent activity.
+        for (var i = cards.Count - 1; i >= 0; i--)
+        {
+            AttentionCardShelfPanel.Children.Add(BuildAttentionCardTile(cards[i]));
+        }
+    }
+
+    Border BuildAttentionCardTile(AttentionCard card)
+    {
+        var content = new StackPanel { Spacing = 3, Width = 120 };
+        content.Children.Add(new TextBlock
+        {
+            Text = card.Icon,
+            FontSize = 28,
+            Foreground = Ink,
+            HorizontalAlignment = HorizontalAlignment.Center,
+        });
+        content.Children.Add(new TextBlock
+        {
+            Text = card.Purpose,
+            FontWeight = FontWeights.Bold,
+            FontSize = 11,
+            Foreground = Ink,
+            TextWrapping = TextWrapping.Wrap,
+            TextAlignment = TextAlignment.Center,
+        });
+        content.Children.Add(new TextBlock
+        {
+            Text = card.Direction == AttentionCardDirection.Sent ? DescribeAttentionCardState(card) : "from the demo peer",
+            FontSize = 9,
+            Opacity = 0.7,
+            Foreground = Ink,
+            TextAlignment = TextAlignment.Center,
+            HorizontalAlignment = HorizontalAlignment.Center,
+        });
+
+        if (card.Direction == AttentionCardDirection.Received && card.AckState == AttentionCardAckState.NotAcknowledged)
+        {
+            var ackButton = new Button
+            {
+                Content = "Ack",
+                FontSize = 10,
+                Background = Teal,
+                Foreground = Paper,
+                HorizontalAlignment = HorizontalAlignment.Center,
+            };
+            ackButton.Click += (_, _) => _ = AcknowledgeAttentionCardAsync(card.MessageId, CancellationToken.None);
+            content.Children.Add(ackButton);
+        }
+        else if (card.AckState == AttentionCardAckState.Acknowledged)
+        {
+            content.Children.Add(new TextBlock
+            {
+                Text = "✓ acknowledged",
+                FontSize = 9,
+                FontWeight = FontWeights.Bold,
+                Foreground = Teal,
+                HorizontalAlignment = HorizontalAlignment.Center,
+            });
+        }
+
+        return new Border
+        {
+            Child = content,
+            Background = Paper,
+            BorderBrush = Ink,
+            BorderThickness = new Thickness(2),
+            CornerRadius = new CornerRadius(10),
+            Padding = new Thickness(10, 8, 10, 8),
+            Opacity = card.AckState == AttentionCardAckState.Acknowledged ? 0.6 : 1.0,
+        };
+    }
+
+    static string DescribeAttentionCardState(AttentionCard card)
+    {
+        if (card.AckState == AttentionCardAckState.Acknowledged) return "acknowledged";
+        return card.DeliveryState switch
+        {
+            AttentionCardDeliveryState.Pending => "sending...",
+            AttentionCardDeliveryState.Delivered => "delivered",
+            AttentionCardDeliveryState.Undelivered => "undelivered",
             _ => "",
         };
     }

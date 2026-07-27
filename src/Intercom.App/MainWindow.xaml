@@ -120,5 +120,105 @@
                     Click="OnSimulateDropClick" />
             </StackPanel>
         </Border>
+
+        <!-- Issue #25: the attention-card shelf + composer
+             (intercom-shell-prototype.html's va-shelf/composer), the same
+             Console Panel shell per docs/mvp-specification.md §7. Same fixed
+             cream/ink/teal "postcard" palette + RequestedTheme="Light" +
+             explicit Foreground/Background discipline as the chat drawer
+             above, for the same reason (see that Border's comment). No live
+             multi-peer connection roster/recipient list exists in this app
+             shell yet (the same gap #22/#23/#24's reports flagged), so the
+             recipient select below has exactly one demo entry and the
+             send/receive/Ack pipeline runs against an in-process
+             LoopbackAttentionCardTransport pair standing in for a second
+             device — see MainWindow.InitializeAttentionCardShelf's doc. -->
+        <Border
+            Background="#FFFBF4E4"
+            BorderBrush="#FF2B1D14"
+            BorderThickness="3"
+            CornerRadius="12"
+            Padding="12"
+            Margin="0,16,0,0"
+            Width="480"
+            RequestedTheme="Light">
+            <StackPanel Spacing="8">
+                <TextBlock Text="ATTENTION CARDS" FontWeight="Bold" FontSize="12" Foreground="#FFB6502F" />
+                <TextBlock
+                    Text="No second physical device is available in this environment, so this shelf runs a real send/receive/Delivered/Acknowledged pipeline against an in-process loopback stand-in for the peer's device. The recipient list below has exactly one demo entry for the same reason."
+                    TextWrapping="Wrap"
+                    FontSize="10"
+                    Opacity="0.65"
+                    Foreground="#FF2B1D14" />
+
+                <TextBlock
+                    x:Name="NoAttentionCardsNotice"
+                    Text="No attention cards yet."
+                    FontSize="10"
+                    Opacity="0.7"
+                    Foreground="#FF2B1D14" />
+                <ScrollViewer x:Name="AttentionCardShelfScrollViewer" HorizontalScrollMode="Enabled" HorizontalScrollBarVisibility="Auto" VerticalScrollMode="Disabled" MaxHeight="150">
+                    <StackPanel x:Name="AttentionCardShelfPanel" Orientation="Horizontal" Spacing="10" />
+                </ScrollViewer>
+
+                <TextBlock Text="Send an attention card" FontWeight="Bold" FontSize="11" Foreground="#FF2B1D14" Margin="0,8,0,0" />
+                <StackPanel Orientation="Horizontal" Spacing="10">
+                    <StackPanel Spacing="4" Width="220">
+                        <TextBlock Text="Purpose" FontSize="9" FontWeight="Bold" Foreground="#FF2B1D14" />
+                        <ComboBox
+                            x:Name="ComposerPresetCombo"
+                            Width="220"
+                            Foreground="#FF2B1D14"
+                            Background="#FFFBF4E4"
+                            SelectionChanged="OnComposerPresetChanged" />
+                        <TextBox
+                            x:Name="ComposerCustomTextBox"
+                            PlaceholderText="Type your own purpose…"
+                            Visibility="Collapsed"
+                            Foreground="#FF2B1D14"
+                            Background="#FFFBF4E4" />
+                    </StackPanel>
+                    <StackPanel Spacing="4" Width="180">
+                        <TextBlock Text="Send to" FontSize="9" FontWeight="Bold" Foreground="#FF2B1D14" />
+                        <!-- Honest constraint (see the Border's comment above):
+                             exactly one demo recipient, no live roster yet. -->
+                        <ComboBox
+                            x:Name="ComposerRecipientCombo"
+                            Width="180"
+                            Foreground="#FF2B1D14"
+                            Background="#FFFBF4E4"
+                            SelectedIndex="0">
+                            <x:String>The demo peer (loopback)</x:String>
+                        </ComboBox>
+                    </StackPanel>
+                </StackPanel>
+
+                <TextBlock Text="Icon (32x32 touch targets)" FontSize="9" FontWeight="Bold" Foreground="#FF2B1D14" Margin="0,4,0,0" />
+                <StackPanel x:Name="EmojiPickerPanel" Orientation="Horizontal" Spacing="4" />
+
+                <Button
+                    x:Name="SendAttentionCardButton"
+                    Content="Send Attention Card"
+                    Background="#FF2F6F6B"
+                    Foreground="#FFFBF4E4"
+                    HorizontalAlignment="Right"
+                    Click="OnSendAttentionCardClick" />
+
+                <Button
+                    x:Name="SimulatePeerAttentionCardButton"
+                    Content="Simulate peer sends a card"
+                    FontSize="10"
+                    Background="#FFE8A33D"
+                    Foreground="#FF2B1D14"
+                    Click="OnSimulatePeerAttentionCardClick" />
+                <Button
+                    x:Name="SimulateAttentionCardDropButton"
+                    Content="Simulate connection drop (for in-flight sends)"
+                    FontSize="10"
+                    Background="#FFC1443A"
+                    Foreground="#FFFBF4E4"
+                    Click="OnSimulateAttentionCardDropClick" />
+            </StackPanel>
+        </Border>
     </StackPanel>
 </Window>

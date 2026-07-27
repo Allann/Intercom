@@ -1,5 +1,6 @@
 using Microsoft.UI.Xaml;
 using Microsoft.Windows.AppLifecycle;
+using Microsoft.Windows.AppNotifications;
 using Intercom.Chat;
 using Intercom.ControlChannel;
 using Intercom.Diagnostics;
@@ -7,6 +8,7 @@ using Intercom.Discovery;
 using Intercom.Identity;
 using Intercom.Lifecycle;
 using Intercom.Presence;
+using Intercom.App.AttentionCards;
 using Intercom.App.Presence;
 using Intercom.App.Startup;
 using Intercom.App.Tray;
@@ -31,6 +33,7 @@ public partial class App : Application
     DiscoveryService? _discoveryService;
     PresenceEngine? _presenceEngine;
     SessionMessagePump? _sessionMessagePump;
+    AttentionCardToastPresenter? _attentionCardToastPresenter;
 
     Microsoft.UI.Dispatching.DispatcherQueue? _uiDispatcherQueue;
 
@@ -51,6 +54,18 @@ public partial class App : Application
     protected override void OnLaunched(LaunchActivatedEventArgs args)
     {
         _uiDispatcherQueue = Microsoft.UI.Dispatching.DispatcherQueue.GetForCurrentThread();
+
+        // Issue #25: registered as early as possible in OnLaunched, per
+        // AttentionCardToastPresenter's class doc — Microsoft Learn's
+        // quickstart says Register() must run before the app reads its own
+        // activation args, though Program.cs's existing single-instance
+        // bootstrap (issue #18) already read them once before App was even
+        // constructed; see that class's remarks for the resulting known
+        // limitation on cold-launch-via-notification-click.
+        _attentionCardToastPresenter = new AttentionCardToastPresenter(_uiDispatcherQueue);
+        _attentionCardToastPresenter.AcknowledgeRequested += OnToastAcknowledgeRequested;
+        _attentionCardToastPresenter.OpenRequested += OnToastOpenRequested;
+        _attentionCardToastPresenter.Initialize();
 
         var launchedViaStartupTask = Program.InitialActivationArguments.Kind == ExtendedActivationKind.StartupTask;
         var outcome = _lifecycle.Start(launchedViaStartupTask);
@@ -78,8 +93,20 @@ public partial class App : Application
         StartDiscovery();
         StartPresence();
         StartChat();
+        StartAttentionCards();
 
         Program.RedirectedActivationReceived += OnRedirectedActivation;
+
+        // Best-effort handling for a COLD launch caused by clicking a
+        // notification (the process wasn't already running) — see
+        // AttentionCardToastPresenter's class remarks for why this path is
+        // unvalidated rather than guaranteed correct.
+        var activatedArgs = Microsoft.Windows.AppLifecycle.AppInstance.GetCurrent().GetActivatedEventArgs();
+        if (activatedArgs.Kind == ExtendedActivationKind.AppNotification
+            && activatedArgs.Data is AppNotificationActivatedEventArgs notificationArgs)
+        {
+            _attentionCardToastPresenter.HandleActivation(notificationArgs);
+        }
     }
 
     /// <summary>Issue #23: local availability + DND state, and the Win32
@@ -139,6 +166,34 @@ public partial class App : Application
         _mainWindow?.AttachChat(_chatTtsSettings);
     }
 
+    /// <summary>Issue #25: gives MainWindow's attention-card shelf/composer
+    /// access to the real <see cref="AttentionCardToastPresenter"/> so an
+    /// inbound card (past the DND chime gate — see MainWindow's
+    /// OnIncomingAttentionCard) can actually show a native toast. The
+    /// send/receive/Ack pipeline itself is wired up inside MainWindow (see
+    /// MainWindow.InitializeAttentionCardShelf) against an in-process
+    /// loopback stand-in, for the same "no live multi-peer connection roster
+    /// yet" reason <see cref="StartChat"/>'s doc comment explains — this
+    /// ticket is not group cards either way (#29/#30's job).</summary>
+    void StartAttentionCards()
+    {
+        _mainWindow?.AttachAttentionCards(_attentionCardToastPresenter!);
+    }
+
+    /// <summary>The human clicked a toast's Acknowledge button — deliberately
+    /// never brings the main window forward (the acceptance criterion this
+    /// exists to satisfy), just performs the real Ack send.</summary>
+    void OnToastAcknowledgeRequested(Guid cardId)
+    {
+        _ = _mainWindow?.AcknowledgeAttentionCardAsync(cardId, CancellationToken.None);
+    }
+
+    /// <summary>The human clicked the toast body (not a button) — the
+    /// ordinary "bring the app to the foreground" activation. Already
+    /// running on the UI thread (see <see cref="AttentionCardToastPresenter"/>'s
+    /// dispatcher marshaling), so no further re-enqueue is needed here.</summary>
+    void OnToastOpenRequested(Guid cardId) => _lifecycle.ShowWindow();
+
     /// <summary>Issue #20: makes discovered-but-unapproved local peers
     /// visible. Deliberately nothing more than that — no trust, no
     /// connection (#21/#22).</summary>
@@ -179,6 +234,7 @@ public partial class App : Application
         }
         _sessionMessagePump?.Dispose();
         _presenceEngine?.Dispose();
+        _attentionCardToastPresenter?.Dispose();
         _lifecycle.Quit();
         Exit();
     }

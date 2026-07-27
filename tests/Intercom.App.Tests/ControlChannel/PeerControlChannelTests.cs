@@ -2,6 +2,7 @@ using System.Net;
 using System.Security.Cryptography;
 using System.Security.Cryptography.X509Certificates;
 using System.Threading.Channels;
+using Intercom.AttentionCards;
 using Intercom.Chat;
 using Intercom.ControlChannel;
 using Intercom.Identity;
@@ -293,9 +294,99 @@ public class PeerControlChannelTests
         Assert.Equal(0, dropCount); // establishing the very first connection is not a "drop"
 
         connection.EnqueueClose();
-        await WaitUntilAsync(() => channel.State is ConnState.Reconnecting);
+        // Wait on dropCount itself, not on channel.State reaching Reconnecting
+        // first: StateChanged fires the ConnectionDropped handler as a
+        // separate step after the state field is already updated, so polling
+        // State and then asserting dropCount synchronously right after is a
+        // race — the poll can observe the new state in the gap before the
+        // event handler has run. Waiting on the actual side effect under
+        // test removes the race entirely.
+        await WaitUntilAsync(() => dropCount >= 1);
 
         Assert.Equal(1, dropCount); // the actual drop from Connected fired exactly once
+        Assert.IsType<ConnState.Reconnecting>(channel.State);
+
+        await channel.DisposeAsync();
+    }
+
+    // ---- issue #25: PeerControlChannelAttentionCardTransport ----
+
+    [Fact]
+    public async Task AttentionCardTransport_ConnectionDropped_OnlyFiresOnGenuineDropFromConnected_NotDuringOrdinaryHandshaking()
+    {
+        // Mirrors ChatTransport's identical regression guard above — the
+        // same StateChanged-fires-on-every-transition pitfall applies here
+        // too.
+        using var remoteCert = SelfSignedCert();
+        var approvedPeer = MakeApprovedPeer(remoteCert);
+        var connector = new FakeConnector();
+        var connection = new FakeTransportConnection(remoteCert);
+        connector.NextConnection = connection;
+        connection.EnqueueReceive(Hello.Current(Capability.AttentionCards).ToFrame(Guid.NewGuid()));
+
+        var channel = new PeerControlChannel(connector, LocalSpki(), Capability.AttentionCards, () => [approvedPeer]);
+        var cardTransport = new PeerControlChannelAttentionCardTransport(channel);
+        var dropCount = 0;
+        cardTransport.ConnectionDropped += () => dropCount++;
+
+        channel.OnDiscovered();
+        await channel.EvaluateConnectAsync(RemoteEndpoint, RemoteSpkiForTieBreak(), CancellationToken.None);
+        Assert.IsType<ConnState.Connected>(channel.State);
+        Assert.Equal(0, dropCount);
+
+        connection.EnqueueClose();
+        // See the identical comment on ChatTransport's version of this test
+        // above — wait on dropCount itself, not on State, to avoid the race
+        // between the state field update and the ConnectionDropped handler
+        // actually running.
+        await WaitUntilAsync(() => dropCount >= 1);
+
+        Assert.Equal(1, dropCount);
+        Assert.IsType<ConnState.Reconnecting>(channel.State);
+
+        await channel.DisposeAsync();
+    }
+
+    [Fact]
+    public async Task AttentionCardTransport_RoutesAttentionCardAndAcknowledgedFramesToTheRightEvents()
+    {
+        // Confirms the adapter tells AttentionCard-type frames (FrameReceived)
+        // apart from Acknowledged-type frames (Acknowledged), rather than
+        // dumping every inbound frame into one event the way ChatTransport
+        // only ever needs to for a single message type.
+        using var remoteCert = SelfSignedCert();
+        var approvedPeer = MakeApprovedPeer(remoteCert);
+        var connector = new FakeConnector();
+        var connection = new FakeTransportConnection(remoteCert);
+        connector.NextConnection = connection;
+        connection.EnqueueReceive(Hello.Current(Capability.AttentionCards).ToFrame(Guid.NewGuid()));
+
+        var channel = new PeerControlChannel(connector, LocalSpki(), Capability.AttentionCards, () => [approvedPeer]);
+        var cardTransport = new PeerControlChannelAttentionCardTransport(channel);
+        ControlFrame? receivedCardFrame = null;
+        Guid? acknowledgedFor = null;
+        cardTransport.FrameReceived += f => receivedCardFrame = f;
+        cardTransport.Acknowledged += id => acknowledgedFor = id;
+
+        channel.OnDiscovered();
+        await channel.EvaluateConnectAsync(RemoteEndpoint, RemoteSpkiForTieBreak(), CancellationToken.None);
+
+        var cardMessageId = Guid.NewGuid();
+        connection.EnqueueReceive(AttentionCardFrameCodec.ToFrame("Dinner's ready", "🍽️", cardMessageId));
+        await WaitUntilAsync(() => receivedCardFrame is not null);
+        Assert.Equal(cardMessageId, receivedCardFrame!.MessageId);
+        Assert.Null(acknowledgedFor);
+
+        var ackCorrelationId = Guid.NewGuid();
+        connection.EnqueueReceive(new ControlFrame
+        {
+            Type = ControlMessageType.Acknowledged,
+            MessageId = Guid.NewGuid(),
+            CorrelationId = ackCorrelationId,
+            Payload = [],
+        });
+        await WaitUntilAsync(() => acknowledgedFor is not null);
+        Assert.Equal(ackCorrelationId, acknowledgedFor);
 
         await channel.DisposeAsync();
     }
