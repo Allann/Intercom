@@ -159,6 +159,7 @@ public sealed partial class PairingDialog : ContentDialog
         {
             Text = "Simulated peer",
             FontWeight = Microsoft.UI.Text.FontWeights.Bold,
+            Foreground = Ink,
             HorizontalAlignment = HorizontalAlignment.Center,
         });
 
@@ -177,6 +178,7 @@ public sealed partial class PairingDialog : ContentDialog
         {
             Text = "Waiting for both nonces...",
             FontSize = 11,
+            Foreground = Ink,
             Opacity = 0.75,
             HorizontalAlignment = HorizontalAlignment.Center,
             TextWrapping = TextWrapping.Wrap,
@@ -185,9 +187,9 @@ public sealed partial class PairingDialog : ContentDialog
         stack.Children.Add(statusText);
 
         var yourRow = new StackPanel { Orientation = Orientation.Horizontal, Spacing = 6, HorizontalAlignment = HorizontalAlignment.Center };
-        var stampButton = new Button { Content = "Stamp Approved", Background = Green };
+        var stampButton = new Button { Content = "Stamp Approved", Background = Green, Foreground = Cream };
         stampButton.Click += (_, _) => _ = OnStampClickAsync(entry);
-        var tearButton = new Button { Content = "Tear Up", Background = Red };
+        var tearButton = new Button { Content = "Tear Up", Background = Red, Foreground = Cream };
         tearButton.Click += (_, _) => _ = OnTearClickAsync(entry);
         entry.StampButton = stampButton;
         entry.TearButton = tearButton;
@@ -196,9 +198,9 @@ public sealed partial class PairingDialog : ContentDialog
         stack.Children.Add(yourRow);
 
         var peerRow = new StackPanel { Orientation = Orientation.Horizontal, Spacing = 6, HorizontalAlignment = HorizontalAlignment.Center };
-        var peerStampButton = new Button { Content = "Peer stamps", FontSize = 10 };
+        var peerStampButton = new Button { Content = "Peer stamps", FontSize = 10, Background = Mustard, Foreground = Ink };
         peerStampButton.Click += (_, _) => _ = OnPeerStampClickAsync(entry);
-        var peerTearButton = new Button { Content = "Peer tears", FontSize = 10 };
+        var peerTearButton = new Button { Content = "Peer tears", FontSize = 10, Background = Mustard, Foreground = Ink };
         peerTearButton.Click += (_, _) => _ = OnPeerTearClickAsync(entry);
         peerRow.Children.Add(peerStampButton);
         peerRow.Children.Add(peerTearButton);
@@ -280,10 +282,10 @@ public sealed partial class PairingDialog : ContentDialog
         var topRow = new StackPanel { Orientation = Orientation.Horizontal, Spacing = 8 };
         topRow.Children.Add(new TextBlock { Text = peer.Revoked ? "✉️" : "💻", VerticalAlignment = VerticalAlignment.Center });
 
-        var nameBox = new TextBox { Text = peer.FriendlyName, Width = 180, IsEnabled = !peer.Revoked };
+        var nameBox = new TextBox { Text = peer.FriendlyName, Width = 180, Foreground = Ink, Background = Cream, IsEnabled = !peer.Revoked };
         topRow.Children.Add(nameBox);
 
-        var renameButton = new Button { Content = "Rename", IsEnabled = !peer.Revoked };
+        var renameButton = new Button { Content = "Rename", Background = Mustard, Foreground = Ink, IsEnabled = !peer.Revoked };
         renameButton.Click += (_, _) =>
         {
             _identityStore.Rename(peer.PeerId, nameBox.Text);
@@ -291,7 +293,7 @@ public sealed partial class PairingDialog : ContentDialog
         };
         topRow.Children.Add(renameButton);
 
-        var revokeButton = new Button { Content = peer.Revoked ? "Forgotten" : "Return to Sender", Background = Red, IsEnabled = !peer.Revoked };
+        var revokeButton = new Button { Content = peer.Revoked ? "Forgotten" : "Return to Sender", Background = Red, Foreground = Cream, IsEnabled = !peer.Revoked };
         revokeButton.Click += (_, _) =>
         {
             _identityStore.Forget(peer.PeerId);
