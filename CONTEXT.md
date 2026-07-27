@@ -8,7 +8,11 @@ Each peer has a stable locally generated identity and a user-configured friendly
 
 ## Contact
 
-A person the local user can reach. A contact may own multiple approved peers, allowing communication to be routed to the device where that person is currently active. There are no user accounts or cloud identities.
+A person the local user can reach. A contact may own multiple approved peers, allowing communication to be routed to the device where that person is currently active. There are no user accounts or cloud identities. Grouping approved peers under a contact is a purely local, unilateral choice on each device — it requires no coordination with or acknowledgement from the peers being grouped, and carries no trust: it only affects routing, never approval.
+
+## Preferred device override
+
+An explicit, per-device "route to me here right now" choice that outranks activity-based routing entirely for that contact, until turned off or the device becomes unavailable. Intended for people whose activity a sender's device can't reliably infer.
 
 ## Approved peer
 
