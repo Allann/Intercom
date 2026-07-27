@@ -10,6 +10,13 @@ sealed class FakeChatTransport : Intercom.Chat.IChatTransport
     public List<ControlFrame> Sent { get; } = [];
     public Exception? FailSendWith { get; set; }
 
+    /// <summary>Test-only convenience for #30's fan-out routing tests: when
+    /// set, every successful <see cref="SendAsync"/> synchronously raises
+    /// <see cref="DeliveryConfirmed"/> for that frame's MessageId before
+    /// returning — deterministic "delivered immediately," with no real delay
+    /// or background task/race involved.</summary>
+    public bool AutoConfirmDelivery { get; set; }
+
     public event Action<ControlFrame>? FrameReceived;
     public event Action<Guid>? DeliveryConfirmed;
     public event Action? ConnectionDropped;
@@ -18,6 +25,7 @@ sealed class FakeChatTransport : Intercom.Chat.IChatTransport
     {
         if (FailSendWith is not null) throw FailSendWith;
         Sent.Add(frame);
+        if (AutoConfirmDelivery) DeliveryConfirmed?.Invoke(frame.MessageId);
         return Task.CompletedTask;
     }
 

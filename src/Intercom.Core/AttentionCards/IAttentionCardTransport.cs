@@ -31,6 +31,17 @@ public interface IAttentionCardTransport
     /// <see cref="DeliveryConfirmed"/>, never raised automatically.</summary>
     event Action<Guid>? Acknowledged;
 
+    /// <summary>Issue #30: raised with the interaction ID (the MessageId
+    /// shared by every fanned-out copy of one card) the instant the peer's
+    /// <see cref="ControlChannel.ControlMessageType.Resolved"/> withdrawal
+    /// broadcast for it arrives — the receiving side's signal to withdraw a
+    /// duplicate notification for an interaction someone else already
+    /// acknowledged (docs/research/active-device-presence.md: "the original
+    /// sender then broadcasts a resolved(interaction_id) message to the
+    /// contact's other live devices so they withdraw duplicate
+    /// notifications"). See <c>Intercom.Routing.AttentionCardFanoutRouter</c>.</summary>
+    event Action<Guid>? Resolved;
+
     /// <summary>Raised when the underlying connection is no longer usable —
     /// any card still Pending at that instant must be shown Undelivered
     /// (ADR-0001: no auto-resend). Never raised by
@@ -60,6 +71,10 @@ public sealed class PeerControlChannelAttentionCardTransport : IAttentionCardTra
             {
                 Acknowledged?.Invoke(correlationId);
             }
+            else if (frame.Type == ControlMessageType.Resolved && frame.CorrelationId is Guid resolvedFor)
+            {
+                Resolved?.Invoke(resolvedFor);
+            }
         };
         _channel.DeliveryConfirmed += id => DeliveryConfirmed?.Invoke(id);
         _channel.StateChanged += (previous, next) =>
@@ -76,6 +91,7 @@ public sealed class PeerControlChannelAttentionCardTransport : IAttentionCardTra
     public event Action<ControlFrame>? FrameReceived;
     public event Action<Guid>? DeliveryConfirmed;
     public event Action<Guid>? Acknowledged;
+    public event Action<Guid>? Resolved;
     public event Action? ConnectionDropped;
 
     public Task SendAsync(ControlFrame frame, CancellationToken cancellationToken) =>
@@ -105,6 +121,7 @@ public sealed class LoopbackAttentionCardTransport : IAttentionCardTransport
     public event Action<ControlFrame>? FrameReceived;
     public event Action<Guid>? DeliveryConfirmed;
     public event Action<Guid>? Acknowledged;
+    public event Action<Guid>? Resolved;
 
     /// <summary>Only ever raised by <see cref="SimulateDrop"/> — a loopback
     /// pair has no real socket to drop on its own.</summary>
@@ -123,6 +140,11 @@ public sealed class LoopbackAttentionCardTransport : IAttentionCardTransport
             if (frame.Type == ControlMessageType.Acknowledged)
             {
                 if (frame.CorrelationId is Guid ackedFor) Acknowledged?.Invoke(ackedFor);
+                return;
+            }
+            if (frame.Type == ControlMessageType.Resolved)
+            {
+                if (frame.CorrelationId is Guid resolvedFor) Resolved?.Invoke(resolvedFor);
                 return;
             }
             if (frame.Type is not ControlMessageType.Hello)

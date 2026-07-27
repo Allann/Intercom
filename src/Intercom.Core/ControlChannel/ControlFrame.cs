@@ -95,6 +95,23 @@ public enum ControlMessageType : ushort
     /// Hello/Delivered meta-messages <see cref="FrameDispatcher"/> already
     /// excludes).</summary>
     Acknowledged = 10,
+
+    /// <summary>Issue #30: the sender's withdrawal broadcast for one fanned-
+    /// out interaction (docs/research/active-device-presence.md "Text and
+    /// attention cards": "the original sender then broadcasts a
+    /// resolved(interaction_id) message to the contact's other live devices
+    /// so they withdraw duplicate notifications"). Its CorrelationId is the
+    /// MessageId shared by every fanned-out copy of the same card (the
+    /// "interaction ID") — same CorrelationId convention as
+    /// <see cref="Delivered"/>/<see cref="Acknowledged"/>. Empty payload.
+    /// Sent only over an already-<see cref="ConnectionTrust.Approved"/>
+    /// connection. Encoded/decoded inline by
+    /// <c>Intercom.Routing.AttentionCardFanoutRouter</c> — small and
+    /// CorrelationId-only, like <see cref="Acknowledged"/>, so it gets no
+    /// separate FrameCodec type of its own. Like every other non-meta message
+    /// type, an inbound Resolved frame still gets its own mechanical
+    /// Delivered receipt in turn (ADR-0001).</summary>
+    Resolved = 11,
 }
 
 /// <summary>
