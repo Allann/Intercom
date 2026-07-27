@@ -5,6 +5,8 @@ namespace Intercom.App.Tests;
 
 public class IdentityStoreTests : IDisposable
 {
+    static readonly DateTimeOffset Epoch = new(2026, 1, 1, 0, 0, 0, TimeSpan.Zero);
+
     readonly string _dir = Path.Combine(Path.GetTempPath(), "IntercomTests_" + Guid.NewGuid());
 
     public IdentityStoreTests() => Directory.CreateDirectory(_dir);
@@ -13,6 +15,18 @@ public class IdentityStoreTests : IDisposable
     {
         if (Directory.Exists(_dir)) Directory.Delete(_dir, recursive: true);
     }
+
+    static SpkiPin Pin(byte seed) => new(Enumerable.Repeat(seed, 32).ToArray());
+
+    static ApprovedPeer MakePeer(byte pinSeed, string name = "Test Peer") => new()
+    {
+        PeerId = Guid.NewGuid(),
+        FriendlyName = name,
+        SpkiSha256 = Pin(pinSeed),
+        Certificate = [1, 2, 3],
+        ApprovedAt = DateTimeOffset.UtcNow,
+        ContactId = "contact-1",
+    };
 
     [Fact]
     public void FreshDirectory_CreatesOneIdentity_AndAnEmptyRegistryFile()
@@ -27,7 +41,7 @@ public class IdentityStoreTests : IDisposable
         Assert.NotEqual(Guid.Empty, store.Identity.PeerId);
         Assert.True(File.Exists(Path.Combine(_dir, "identity.dat")));
         Assert.True(File.Exists(Path.Combine(_dir, "approved-peers.dat")));
-        Assert.Empty(store.Registry.Peers);
+        Assert.Empty(store.ApprovedPeers);
     }
 
     [Fact]
@@ -49,16 +63,7 @@ public class IdentityStoreTests : IDisposable
     {
         var first = new IdentityStore(_dir);
         first.LoadOrCreate();
-        var peer = new ApprovedPeer
-        {
-            PeerId = Guid.NewGuid(),
-            FriendlyName = "Someone",
-            SpkiSha256 = new SpkiPin(Enumerable.Repeat((byte)3, 32).ToArray()),
-            Certificate = [1, 2, 3],
-            ApprovedAt = DateTimeOffset.UtcNow,
-        };
-        first.Registry.Add(peer);
-        first.SaveRegistry();
+        first.Approve(MakePeer(3));
 
         File.WriteAllBytes(Path.Combine(_dir, "identity.dat"), [1, 2, 3, 4]);
 
@@ -66,7 +71,7 @@ public class IdentityStoreTests : IDisposable
         second.LoadOrCreate();
 
         Assert.True(second.IdentityWasRegenerated);
-        Assert.Empty(second.Registry.Peers); // old approvals must not carry forward onto a new identity
+        Assert.Empty(second.ApprovedPeers); // old approvals must not carry forward onto a new identity
     }
 
     [Fact]
@@ -84,7 +89,7 @@ public class IdentityStoreTests : IDisposable
         Assert.False(second.IdentityWasRegenerated);
         Assert.Equal(originalPeerId, second.Identity.PeerId);
         Assert.True(second.RegistryWasReset);
-        Assert.Empty(second.Registry.Peers);
+        Assert.Empty(second.ApprovedPeers);
     }
 
     [Fact]
@@ -110,15 +115,14 @@ public class IdentityStoreTests : IDisposable
         var first = new IdentityStore(_dir);
         first.LoadOrCreate();
         var peerId = Guid.NewGuid();
-        var longAgo = DateTimeOffset.UtcNow - PendingPairingRegistry.ExpiryTimeout - TimeSpan.FromMinutes(10);
-        first.PendingPairings.TryStart(peerId, longAgo);
-        first.SavePendingPairings();
+        var longAgo = DateTimeOffset.UtcNow - IdentityStore.PendingPairingExpiry - TimeSpan.FromMinutes(10);
+        first.StartPairing(peerId, longAgo);
 
         var second = new IdentityStore(_dir);
         second.LoadOrCreate();
 
-        Assert.Empty(second.PendingPairings.Pending);
-        Assert.True(second.PendingPairings.TryStart(peerId, DateTimeOffset.UtcNow));
+        Assert.Empty(second.PendingPairings);
+        Assert.True(second.StartPairing(peerId, DateTimeOffset.UtcNow));
     }
 
     [Fact]
@@ -132,21 +136,12 @@ public class IdentityStoreTests : IDisposable
         store.LoadOrCreate();
         Assert.True(store.IdentityWasRegenerated);
 
-        var peer = new ApprovedPeer
-        {
-            PeerId = Guid.NewGuid(),
-            FriendlyName = "Someone",
-            SpkiSha256 = new SpkiPin(Enumerable.Repeat((byte)4, 32).ToArray()),
-            Certificate = [1, 2, 3],
-            ApprovedAt = DateTimeOffset.UtcNow,
-        };
-        store.Registry.Add(peer);
-        store.SaveRegistry();
+        store.Approve(MakePeer(4));
 
         store.LoadOrCreate(); // second call: identity now loads fine
 
         Assert.False(store.IdentityWasRegenerated);
-        Assert.Single(store.Registry.Peers); // must actually have loaded the registry this time
+        Assert.Single(store.ApprovedPeers); // must actually have loaded the registry this time
     }
 
     [Fact]
@@ -157,29 +152,20 @@ public class IdentityStoreTests : IDisposable
         // in-memory data must not be written back to disk as the "reset" state.
         var store = new IdentityStore(_dir);
         store.LoadOrCreate();
-        var peer = new ApprovedPeer
-        {
-            PeerId = Guid.NewGuid(),
-            FriendlyName = "Someone",
-            SpkiSha256 = new SpkiPin(Enumerable.Repeat((byte)5, 32).ToArray()),
-            Certificate = [1, 2, 3],
-            ApprovedAt = DateTimeOffset.UtcNow,
-        };
-        store.Registry.Add(peer);
-        store.SaveRegistry();
-        Assert.Single(store.Registry.Peers);
+        store.Approve(MakePeer(5));
+        Assert.Single(store.ApprovedPeers);
 
         File.WriteAllBytes(Path.Combine(_dir, "approved-peers.dat"), [9, 9, 9]);
         store.LoadOrCreate(); // same instance, still holding the peer in memory
 
         Assert.True(store.RegistryWasReset);
-        Assert.Empty(store.Registry.Peers);
+        Assert.Empty(store.ApprovedPeers);
 
         // And the file on disk must reflect the cleared state too, not the
         // stale in-memory peer that existed before this call.
         var reloaded = new IdentityStore(_dir);
         reloaded.LoadOrCreate();
-        Assert.Empty(reloaded.Registry.Peers);
+        Assert.Empty(reloaded.ApprovedPeers);
     }
 
     [Fact]
@@ -192,16 +178,7 @@ public class IdentityStoreTests : IDisposable
         // a fresh install.
         var first = new IdentityStore(_dir);
         first.LoadOrCreate();
-        var peer = new ApprovedPeer
-        {
-            PeerId = Guid.NewGuid(),
-            FriendlyName = "Someone",
-            SpkiSha256 = new SpkiPin(Enumerable.Repeat((byte)6, 32).ToArray()),
-            Certificate = [1, 2, 3],
-            ApprovedAt = DateTimeOffset.UtcNow,
-        };
-        first.Registry.Add(peer);
-        first.SaveRegistry();
+        first.Approve(MakePeer(6));
 
         File.Delete(Path.Combine(_dir, "identity.dat")); // only identity.dat is lost
 
@@ -209,7 +186,7 @@ public class IdentityStoreTests : IDisposable
         second.LoadOrCreate();
 
         Assert.True(second.IdentityWasRegenerated);
-        Assert.Empty(second.Registry.Peers);
+        Assert.Empty(second.ApprovedPeers);
     }
 
     [Fact]
@@ -219,14 +196,13 @@ public class IdentityStoreTests : IDisposable
         first.LoadOrCreate();
         var peerId = Guid.NewGuid();
         var future = DateTimeOffset.UtcNow + TimeSpan.FromDays(1);
-        first.PendingPairings.TryStart(peerId, future);
-        first.SavePendingPairings();
+        first.StartPairing(peerId, future);
 
         var second = new IdentityStore(_dir);
         second.LoadOrCreate();
 
-        Assert.Empty(second.PendingPairings.Pending);
-        Assert.True(second.PendingPairings.TryStart(peerId, DateTimeOffset.UtcNow));
+        Assert.Empty(second.PendingPairings);
+        Assert.True(second.StartPairing(peerId, DateTimeOffset.UtcNow));
     }
 
     [Fact]
@@ -234,18 +210,206 @@ public class IdentityStoreTests : IDisposable
     {
         var store = new IdentityStore(_dir);
         store.LoadOrCreate();
-        store.PendingPairings.TryStart(Guid.NewGuid(), DateTimeOffset.UtcNow);
-        store.SavePendingPairings();
-        Assert.Single(store.PendingPairings.Pending);
+        store.StartPairing(Guid.NewGuid(), DateTimeOffset.UtcNow);
+        Assert.Single(store.PendingPairings);
 
         File.WriteAllBytes(Path.Combine(_dir, "pending-pairings.dat"), [9, 9, 9]);
         store.LoadOrCreate(); // same instance, still holding the pending request in memory
 
         Assert.True(store.PendingPairingsWereReset);
-        Assert.Empty(store.PendingPairings.Pending);
+        Assert.Empty(store.PendingPairings);
 
         var reloaded = new IdentityStore(_dir);
         reloaded.LoadOrCreate();
-        Assert.Empty(reloaded.PendingPairings.Pending);
+        Assert.Empty(reloaded.PendingPairings);
+    }
+
+    // --- Atomic verb behaviour (formerly ApprovedPeerRegistryTests) ---
+
+    [Fact]
+    public void FindApprovedBySpki_FindsMatchingUnrevokedPeer()
+    {
+        var store = new IdentityStore(_dir);
+        store.LoadOrCreate();
+        var peer = store.Approve(MakePeer(5));
+
+        var found = store.FindApprovedBySpki(Pin(5));
+
+        Assert.NotNull(found);
+        Assert.Equal(peer.PeerId, found!.PeerId);
+    }
+
+    [Fact]
+    public void FindApprovedBySpki_NeverReturnsRevokedPeer()
+    {
+        var store = new IdentityStore(_dir);
+        store.LoadOrCreate();
+        var peer = store.Approve(MakePeer(5));
+
+        store.Forget(peer.PeerId);
+
+        Assert.Null(store.FindApprovedBySpki(Pin(5)));
+    }
+
+    [Fact]
+    public void Forget_RemovesPinCertificateAndContactAssociation_NotJustAFlag()
+    {
+        var store = new IdentityStore(_dir);
+        store.LoadOrCreate();
+        var peer = store.Approve(MakePeer(5));
+
+        var result = store.Forget(peer.PeerId);
+
+        Assert.True(result);
+        var stored = store.ApprovedPeers.Single(p => p.PeerId == peer.PeerId);
+        Assert.True(stored.Revoked);
+        Assert.Null(stored.SpkiSha256);
+        Assert.Null(stored.Certificate);
+        Assert.Null(stored.ContactId);
+        // The record itself is retained as a local audit trace, per ADR-0002.
+        Assert.Equal(peer.FriendlyName, stored.FriendlyName);
+    }
+
+    [Fact]
+    public void Forget_IsIdempotent_SecondCallReturnsFalse()
+    {
+        var store = new IdentityStore(_dir);
+        store.LoadOrCreate();
+        var peer = store.Approve(MakePeer(5));
+
+        Assert.True(store.Forget(peer.PeerId));
+        Assert.False(store.Forget(peer.PeerId));
+    }
+
+    [Fact]
+    public void Forget_UnknownPeerId_ReturnsFalse()
+    {
+        var store = new IdentityStore(_dir);
+        store.LoadOrCreate();
+        Assert.False(store.Forget(Guid.NewGuid()));
+    }
+
+    [Fact]
+    public void Forget_Persists_SoARestartSeesTheRevocation()
+    {
+        var first = new IdentityStore(_dir);
+        first.LoadOrCreate();
+        var peer = first.Approve(MakePeer(5));
+        first.Forget(peer.PeerId);
+
+        var second = new IdentityStore(_dir);
+        second.LoadOrCreate();
+
+        var stored = second.ApprovedPeers.Single(p => p.PeerId == peer.PeerId);
+        Assert.True(stored.Revoked);
+    }
+
+    // --- Atomic verb behaviour (formerly PendingPairingRegistryTests) ---
+
+    [Fact]
+    public void StartPairing_SecondRequestForSamePeer_IsBlocked()
+    {
+        var store = new IdentityStore(_dir);
+        store.LoadOrCreate();
+        var peerId = Guid.NewGuid();
+
+        Assert.True(store.StartPairing(peerId, Epoch));
+        Assert.False(store.StartPairing(peerId, Epoch.AddSeconds(1)));
+    }
+
+    [Fact]
+    public void StartPairing_DifferentPeers_BothSucceed()
+    {
+        var store = new IdentityStore(_dir);
+        store.LoadOrCreate();
+        Assert.True(store.StartPairing(Guid.NewGuid(), Epoch));
+        Assert.True(store.StartPairing(Guid.NewGuid(), Epoch));
+    }
+
+    [Fact]
+    public void StartPairing_ExpiredExistingRequest_NeverBlocksANewAttempt()
+    {
+        var store = new IdentityStore(_dir);
+        store.LoadOrCreate();
+        var peerId = Guid.NewGuid();
+        store.StartPairing(peerId, Epoch);
+
+        // Well past the 2-minute expiry, and critically: without anyone
+        // having called PruneExpiredPairings first. StartPairing must prune
+        // it itself.
+        var muchLater = Epoch + IdentityStore.PendingPairingExpiry + TimeSpan.FromMinutes(10);
+
+        Assert.True(store.StartPairing(peerId, muchLater));
+    }
+
+    [Fact]
+    public void PruneExpiredPairings_DropsOnlyExpiredEntries()
+    {
+        var store = new IdentityStore(_dir);
+        store.LoadOrCreate();
+        var freshPeer = Guid.NewGuid();
+        var stalePeer = Guid.NewGuid();
+        store.StartPairing(stalePeer, Epoch);
+        store.StartPairing(freshPeer, Epoch.AddMinutes(1));
+
+        var checkTime = Epoch + IdentityStore.PendingPairingExpiry + TimeSpan.FromSeconds(1);
+        var removed = store.PruneExpiredPairings(checkTime);
+
+        Assert.Equal(1, removed);
+        Assert.Single(store.PendingPairings);
+        Assert.Equal(freshPeer, store.PendingPairings[0].PeerId);
+    }
+
+    [Fact]
+    public void CompletePairing_RemovesTheRequest()
+    {
+        var store = new IdentityStore(_dir);
+        store.LoadOrCreate();
+        var peerId = Guid.NewGuid();
+        store.StartPairing(peerId, Epoch);
+
+        Assert.True(store.CompletePairing(peerId));
+        Assert.Empty(store.PendingPairings);
+    }
+
+    [Fact]
+    public void CompletePairing_UnknownPeerId_ReturnsFalse()
+    {
+        var store = new IdentityStore(_dir);
+        store.LoadOrCreate();
+        Assert.False(store.CompletePairing(Guid.NewGuid()));
+    }
+
+    [Fact]
+    public void CompletePairing_Persists_SoARestartDoesNotSeeAStaleRequest()
+    {
+        var first = new IdentityStore(_dir);
+        first.LoadOrCreate();
+        var peerId = Guid.NewGuid();
+        first.StartPairing(peerId, DateTimeOffset.UtcNow);
+        first.CompletePairing(peerId);
+
+        var second = new IdentityStore(_dir);
+        second.LoadOrCreate();
+
+        Assert.Empty(second.PendingPairings);
+    }
+
+    [Fact]
+    public void IsExpired_AtExactlyTheTimeout_CountsAsExpired()
+    {
+        var pairing = new PendingPairing { PeerId = Guid.NewGuid(), StartedAt = Epoch };
+        var exactlyAtTimeout = Epoch + IdentityStore.PendingPairingExpiry;
+
+        Assert.True(pairing.IsExpired(IdentityStore.PendingPairingExpiry, exactlyAtTimeout));
+    }
+
+    [Fact]
+    public void IsExpired_JustBeforeTheTimeout_IsNotExpired()
+    {
+        var pairing = new PendingPairing { PeerId = Guid.NewGuid(), StartedAt = Epoch };
+        var justBefore = Epoch + IdentityStore.PendingPairingExpiry - TimeSpan.FromSeconds(1);
+
+        Assert.False(pairing.IsExpired(IdentityStore.PendingPairingExpiry, justBefore));
     }
 }

@@ -2,9 +2,10 @@ namespace Intercom.Identity;
 
 /// <summary>
 /// The set of peers this device has approved. In-memory only — IdentityStore
-/// owns loading/persisting it.
+/// is the sole caller, owning loading, persisting, and atomicity of every
+/// mutation (see IdentityStore.Approve/Forget).
 /// </summary>
-public sealed class ApprovedPeerRegistry
+sealed class ApprovedPeerRegistry
 {
     readonly List<ApprovedPeer> _peers = [];
 

@@ -4,8 +4,10 @@ namespace Intercom.Identity;
 /// In-progress pairing ceremonies. ADR-0002: one outstanding request per peer
 /// identity; a 2-minute expiry with no trust-state change. This registry only
 /// enforces those two rules over storage — the ceremony itself is #22.
+/// IdentityStore is the sole caller, owning atomicity of every mutation (see
+/// IdentityStore.StartPairing/CompletePairing/PruneExpiredPairings).
 /// </summary>
-public sealed class PendingPairingRegistry
+sealed class PendingPairingRegistry
 {
     public static readonly TimeSpan ExpiryTimeout = TimeSpan.FromMinutes(2);
 

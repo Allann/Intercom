@@ -29,13 +29,19 @@ public sealed class IdentityStore
     const string RegistryEntropyLabel = "Intercom.ApprovedPeers.v1";
     const string PendingPairingEntropyLabel = "Intercom.PendingPairings.v1";
 
+    /// <summary>ADR-0002: one outstanding pairing request per peer identity,
+    /// expiring after this long with no trust-state change.</summary>
+    public static readonly TimeSpan PendingPairingExpiry = PendingPairingRegistry.ExpiryTimeout;
+
     readonly string _identityPath;
     readonly string _registryPath;
     readonly string _pendingPairingPath;
+    readonly ApprovedPeerRegistry _registry = new();
+    readonly PendingPairingRegistry _pendingPairings = new();
 
     public LocalIdentity Identity { get; private set; } = null!;
-    public ApprovedPeerRegistry Registry { get; } = new();
-    public PendingPairingRegistry PendingPairings { get; } = new();
+    public IReadOnlyList<ApprovedPeer> ApprovedPeers => _registry.Peers;
+    public IReadOnlyList<PendingPairing> PendingPairings => _pendingPairings.Pending;
 
     /// <summary>True only when a previously-existing identity could not be
     /// read (corrupted) or had expired — i.e. something was actually lost and
@@ -93,14 +99,14 @@ public sealed class IdentityStore
             // files — LoadOrCreate is not guaranteed to only ever run once
             // against a fresh instance, and leaving stale in-memory state
             // behind would silently carry it into the new identity.
-            Registry.ReplaceAll([]);
-            PendingPairings.ReplaceAll([]);
+            _registry.ReplaceAll([]);
+            _pendingPairings.ReplaceAll([]);
             DeleteIfExists(_registryPath);
             DeleteIfExists(_pendingPairingPath);
 
             identity = LocalIdentity.CreateNew();
             PersistIdentity(identity);
-            PersistRegistry(Registry.Peers); // establish an empty registry file now, not lazily on first mutation
+            PersistRegistry(_registry.Peers); // establish an empty registry file now, not lazily on first mutation
         }
 
         Identity = identity;
@@ -113,7 +119,7 @@ public sealed class IdentityStore
             var peers = TryLoadRegistry();
             if (peers is not null)
             {
-                Registry.ReplaceAll(peers);
+                _registry.ReplaceAll(peers);
             }
             else if (registryExistedBefore)
             {
@@ -122,10 +128,10 @@ public sealed class IdentityStore
                 // (e.g. from an earlier successful call) before persisting the
                 // replacement — otherwise stale in-memory approvals would be
                 // written back to disk as if they were the reset state.
-                Registry.ReplaceAll([]);
+                _registry.ReplaceAll([]);
                 // Replace the corrupt file immediately rather than leaving it
                 // to fail the same way on every future launch.
-                PersistRegistry(Registry.Peers);
+                PersistRegistry(_registry.Peers);
             }
 
             var pending = TryLoadPendingPairings();
@@ -145,12 +151,12 @@ public sealed class IdentityStore
                     if (p.StartedAt > now) { rejectedFutureCount++; continue; }
                     valid.Add(p);
                 }
-                PendingPairings.ReplaceAll(valid);
+                _pendingPairings.ReplaceAll(valid);
             }
             else if (pendingExistedBefore)
             {
                 PendingPairingsWereReset = true;
-                PendingPairings.ReplaceAll([]); // same fail-closed reasoning as the registry above
+                _pendingPairings.ReplaceAll([]); // same fail-closed reasoning as the registry above
             }
 
             // Prune expired requests on every load (ADR-0002: 2-minute expiry
@@ -158,16 +164,65 @@ public sealed class IdentityStore
             // session never lingers or blocks that peer indefinitely. Persist
             // afterward whenever something changed, so a corrupt file gets
             // replaced and pruned/rejected entries don't reappear next launch.
-            var prunedCount = PendingPairings.RemoveExpired(DateTimeOffset.UtcNow);
+            var prunedCount = _pendingPairings.RemoveExpired(DateTimeOffset.UtcNow);
             if (prunedCount > 0 || rejectedFutureCount > 0 || PendingPairingsWereReset)
             {
-                SavePendingPairings();
+                PersistPendingPairings(_pendingPairings.Pending);
             }
         }
     }
 
-    public void SaveRegistry() => PersistRegistry(Registry.Peers);
-    public void SavePendingPairings() => PersistPendingPairings(PendingPairings.Pending);
+    /// <summary>Fail-closed lookup: never returns a revoked peer as approved.</summary>
+    public ApprovedPeer? FindApprovedBySpki(SpkiPin spkiSha256) => _registry.FindApprovedBySpki(spkiSha256);
+
+    /// <summary>Adds the peer to the approved registry and persists atomically —
+    /// callers never need to remember a separate save step.</summary>
+    public ApprovedPeer Approve(ApprovedPeer peer)
+    {
+        _registry.Add(peer);
+        PersistRegistry(_registry.Peers);
+        return peer;
+    }
+
+    /// <summary>Revokes the peer's approval (ADR-0002: pin/cert/contact
+    /// association removed, record kept as audit trace) and persists
+    /// atomically. False, with no write, if the peer is unknown or already
+    /// revoked.</summary>
+    public bool Forget(Guid peerId)
+    {
+        if (!_registry.Forget(peerId)) return false;
+        PersistRegistry(_registry.Peers);
+        return true;
+    }
+
+    /// <summary>Starts a pairing ceremony for the peer and persists
+    /// atomically. False, with no write, if a non-expired request for this
+    /// peer is already outstanding (ADR-0002: one outstanding request per
+    /// peer identity).</summary>
+    public bool StartPairing(Guid peerId, DateTimeOffset now)
+    {
+        if (!_pendingPairings.TryStart(peerId, now)) return false;
+        PersistPendingPairings(_pendingPairings.Pending);
+        return true;
+    }
+
+    /// <summary>Completes (removes) the peer's pending pairing request and
+    /// persists atomically. False, with no write, if none was outstanding.</summary>
+    public bool CompletePairing(Guid peerId)
+    {
+        if (!_pendingPairings.Complete(peerId)) return false;
+        PersistPendingPairings(_pendingPairings.Pending);
+        return true;
+    }
+
+    /// <summary>Drops expired pending requests (ADR-0002: no trust-state
+    /// change results) and persists atomically if anything was dropped.</summary>
+    public int PruneExpiredPairings(DateTimeOffset now)
+    {
+        var prunedCount = _pendingPairings.RemoveExpired(now);
+        if (prunedCount > 0) PersistPendingPairings(_pendingPairings.Pending);
+        return prunedCount;
+    }
 
     LocalIdentity? TryLoadIdentity()
     {
