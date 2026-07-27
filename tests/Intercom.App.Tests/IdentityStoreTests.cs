@@ -183,6 +183,53 @@ public class IdentityStoreTests : IDisposable
     }
 
     [Fact]
+    public void IdentityFileLost_ButRegistryFileSurvives_IsStillReportedAsRegenerated()
+    {
+        // Identity loss is what matters, not merely "identity.dat is
+        // missing" — if the registry/pending files are still there when
+        // identity.dat disappears, that's identity loss (those survivors get
+        // wiped below) and callers must be warned, not told this looks like
+        // a fresh install.
+        var first = new IdentityStore(_dir);
+        first.LoadOrCreate();
+        var peer = new ApprovedPeer
+        {
+            PeerId = Guid.NewGuid(),
+            FriendlyName = "Someone",
+            SpkiSha256 = new SpkiPin(Enumerable.Repeat((byte)6, 32).ToArray()),
+            Certificate = [1, 2, 3],
+            ApprovedAt = DateTimeOffset.UtcNow,
+        };
+        first.Registry.Add(peer);
+        first.SaveRegistry();
+
+        File.Delete(Path.Combine(_dir, "identity.dat")); // only identity.dat is lost
+
+        var second = new IdentityStore(_dir);
+        second.LoadOrCreate();
+
+        Assert.True(second.IdentityWasRegenerated);
+        Assert.Empty(second.Registry.Peers);
+    }
+
+    [Fact]
+    public void FutureDatedPendingPairing_IsRejectedOnLoad_AndDoesNotBlockANewAttempt()
+    {
+        var first = new IdentityStore(_dir);
+        first.LoadOrCreate();
+        var peerId = Guid.NewGuid();
+        var future = DateTimeOffset.UtcNow + TimeSpan.FromDays(1);
+        first.PendingPairings.TryStart(peerId, future);
+        first.SavePendingPairings();
+
+        var second = new IdentityStore(_dir);
+        second.LoadOrCreate();
+
+        Assert.Empty(second.PendingPairings.Pending);
+        Assert.True(second.PendingPairings.TryStart(peerId, DateTimeOffset.UtcNow));
+    }
+
+    [Fact]
     public void PendingPairingCorruption_OnAlreadyPopulatedStore_ClearsInMemoryBeforePersisting()
     {
         var store = new IdentityStore(_dir);

@@ -80,7 +80,13 @@ public sealed class IdentityStore
         var identity = TryLoadIdentity();
         if (identity is null)
         {
-            IdentityWasRegenerated = identityExistedBefore;
+            // Identity loss is what triggers recovery (re-pairing warning),
+            // not merely "identity.dat happened to be missing". If the
+            // registry or pending-pairing files survived while identity.dat
+            // was lost, that's still identity loss — those files get wiped
+            // below the same as any other regeneration, and callers must be
+            // told so they don't mistake it for a fresh install.
+            IdentityWasRegenerated = identityExistedBefore || registryExistedBefore || pendingExistedBefore;
 
             // Old approvals/pending requests are meaningless against a new
             // identity. Clear the in-memory collections, not just the disk
@@ -123,9 +129,23 @@ public sealed class IdentityStore
             }
 
             var pending = TryLoadPendingPairings();
+            var rejectedFutureCount = 0;
             if (pending is not null)
             {
-                PendingPairings.ReplaceAll(pending);
+                // A future-dated StartedAt is malformed input (clock rollback,
+                // manual tampering, corruption that survived deserialization):
+                // if accepted, ADR-0002's 2-minute expiry would only start
+                // counting down from that future instant, letting the request
+                // block pairing for far longer than the rule allows. Fail
+                // closed by dropping it on load rather than trusting it.
+                var now = DateTimeOffset.UtcNow;
+                var valid = new List<PendingPairing>(pending.Count);
+                foreach (var p in pending)
+                {
+                    if (p.StartedAt > now) { rejectedFutureCount++; continue; }
+                    valid.Add(p);
+                }
+                PendingPairings.ReplaceAll(valid);
             }
             else if (pendingExistedBefore)
             {
@@ -137,9 +157,9 @@ public sealed class IdentityStore
             // with no trust-state change) so a stale request from a previous
             // session never lingers or blocks that peer indefinitely. Persist
             // afterward whenever something changed, so a corrupt file gets
-            // replaced and pruned entries don't reappear next launch.
+            // replaced and pruned/rejected entries don't reappear next launch.
             var prunedCount = PendingPairings.RemoveExpired(DateTimeOffset.UtcNow);
-            if (prunedCount > 0 || PendingPairingsWereReset)
+            if (prunedCount > 0 || rejectedFutureCount > 0 || PendingPairingsWereReset)
             {
                 SavePendingPairings();
             }
