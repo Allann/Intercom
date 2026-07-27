@@ -13,6 +13,7 @@ using Intercom.Discovery;
 using Intercom.Identity;
 using Intercom.Lifecycle;
 using Intercom.Presence;
+using Intercom.Updates;
 using Intercom.App.AttentionCards;
 using Intercom.App.Chat;
 using Intercom.App.Pairing;
@@ -47,6 +48,10 @@ public sealed partial class MainWindow : Window, IResidentWindow
 
     IdentityStore? _identityStore;
     DndSettingsStore? _dndSettings;
+
+    // ---- Issue #31: manual update check ----
+    UpdateAvailableNotice? _pendingUpdateNotice;
+    Action<AppVersion>? _onUpdateNoticeDismissed;
 
     ChatTtsSettingsStore? _chatTtsSettings;
     ChatSpeechService? _chatSpeechService;
@@ -116,6 +121,36 @@ public sealed partial class MainWindow : Window, IResidentWindow
     public void ShowCrashNotice()
     {
         CrashNotice.IsOpen = true;
+    }
+
+    /// <summary>Issue #31: surfaces the passive "update available" notice.
+    /// <paramref name="onDismissed"/> is invoked (with the notice's own
+    /// version) only when the user actually clicks the InfoBar's close
+    /// button — see <see cref="OnUpdateNoticeCloseButtonClick"/> — not on any
+    /// other path, so the caller can persist "dismissed" exactly once per
+    /// real dismissal. Must be called on the UI thread.</summary>
+    public void ShowUpdateNotice(UpdateAvailableNotice notice, Action<AppVersion> onDismissed)
+    {
+        _pendingUpdateNotice = notice;
+        _onUpdateNoticeDismissed = onDismissed;
+        UpdateNotice.Message = $"Version {notice.Version} is available. You're currently running an older version.";
+        UpdateNotice.IsOpen = true;
+    }
+
+    void OnUpdateNoticeCloseButtonClick(InfoBar sender, object args)
+    {
+        if (_pendingUpdateNotice is { } notice) _onUpdateNoticeDismissed?.Invoke(notice.Version);
+    }
+
+    /// <summary>Issue #31 requirement 4: no download/install logic at all —
+    /// this just opens the release's GitHub page in the user's default
+    /// browser, per ADR-0003's "manual update" workflow (re-running the
+    /// newly downloaded, identically-signed MSIX upgrades in place).</summary>
+    async void OnUpdateNoticeOpenReleaseClick(object sender, RoutedEventArgs e)
+    {
+        if (_pendingUpdateNotice is not { } notice) return;
+        if (!Uri.TryCreate(notice.ReleaseUrl, UriKind.Absolute, out var uri)) return;
+        await Windows.System.Launcher.LaunchUriAsync(uri);
     }
 
     public void Quit()

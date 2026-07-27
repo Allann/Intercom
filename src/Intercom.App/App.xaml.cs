@@ -8,10 +8,12 @@ using Intercom.Discovery;
 using Intercom.Identity;
 using Intercom.Lifecycle;
 using Intercom.Presence;
+using Intercom.Updates;
 using Intercom.App.AttentionCards;
 using Intercom.App.Presence;
 using Intercom.App.Startup;
 using Intercom.App.Tray;
+using Intercom.App.Updates;
 
 namespace Intercom.App;
 
@@ -34,6 +36,10 @@ public partial class App : Application
     PresenceEngine? _presenceEngine;
     SessionMessagePump? _sessionMessagePump;
     AttentionCardToastPresenter? _attentionCardToastPresenter;
+    readonly UpdateChecker _updateChecker = new(
+        new GitHubReleaseVersionSource(),
+        new PackageRunningVersionProvider(),
+        new UpdateNoticeStore());
 
     Microsoft.UI.Dispatching.DispatcherQueue? _uiDispatcherQueue;
 
@@ -94,6 +100,7 @@ public partial class App : Application
         StartPresence();
         StartChat();
         StartAttentionCards();
+        StartUpdateCheck();
 
         Program.RedirectedActivationReceived += OnRedirectedActivation;
 
@@ -178,6 +185,24 @@ public partial class App : Application
     void StartAttentionCards()
     {
         _mainWindow?.AttachAttentionCards(_attentionCardToastPresenter!);
+    }
+
+    /// <summary>Issue #31: fire-and-forget background check against the
+    /// GitHub Releases API — per ADR-0003 and the ticket's own acceptance
+    /// criteria, this must never block startup and must never surface an
+    /// error to the user beyond simply not showing a notice, which is
+    /// exactly what <see cref="UpdateChecker.CheckAsync"/>'s own contract
+    /// guarantees (it never throws). Started after the rest of the shell is
+    /// already up and running, not awaited by OnLaunched.</summary>
+    void StartUpdateCheck() => _ = CheckForUpdatesAsync();
+
+    async Task CheckForUpdatesAsync()
+    {
+        var notice = await _updateChecker.CheckAsync();
+        if (notice is null) return;
+
+        _uiDispatcherQueue?.TryEnqueue(() =>
+            _mainWindow?.ShowUpdateNotice(notice, onDismissed: version => _updateChecker.Dismiss(version)));
     }
 
     /// <summary>The human clicked a toast's Acknowledge button — deliberately

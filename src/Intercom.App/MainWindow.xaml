@@ -10,6 +10,25 @@
             Severity="Warning"
             IsOpen="False"
             IsClosable="True" />
+
+        <!-- Issue #31: manual update check. Passive-only per ADR-0003 — no
+             download/install affordance, just detection + an honest "open
+             the release page in your browser" action. Dismissing persists
+             per-version (see MainWindow.OnUpdateNoticeCloseButtonClick) so it
+             doesn't reappear every launch, but a newer release than the
+             dismissed one will still surface a fresh notice. -->
+        <InfoBar
+            x:Name="UpdateNotice"
+            Title="An update is available"
+            Severity="Informational"
+            IsOpen="False"
+            IsClosable="True"
+            CloseButtonClick="OnUpdateNoticeCloseButtonClick">
+            <InfoBar.ActionButton>
+                <Button x:Name="UpdateNoticeOpenReleaseButton" Content="View release" Click="OnUpdateNoticeOpenReleaseClick" />
+            </InfoBar.ActionButton>
+        </InfoBar>
+
         <TextBlock Text="Intercom" FontSize="24" FontWeight="Bold" />
         <TextBlock Text="App shell scaffolding placeholder (issue #18)" />
 
