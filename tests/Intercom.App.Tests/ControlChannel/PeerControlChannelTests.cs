@@ -4,6 +4,7 @@ using System.Security.Cryptography.X509Certificates;
 using System.Threading.Channels;
 using Intercom.ControlChannel;
 using Intercom.Identity;
+using Intercom.Presence;
 using Xunit;
 
 namespace Intercom.App.Tests.ControlChannel;
@@ -221,6 +222,148 @@ public class PeerControlChannelTests
 
         await dropped.Task.WaitAsync(WaitTimeout);
         Assert.Empty(received);
+
+        await channel.DisposeAsync();
+    }
+
+    // ---- issue #23: presence broadcast ----
+
+    static PresenceLease SamplePresenceLease() => new()
+    {
+        DeviceId = Guid.NewGuid(),
+        ContactId = Guid.NewGuid(),
+        IncarnationId = Guid.NewGuid(),
+        Sequence = 1,
+        Availability = AvailabilityState.Available,
+        Dnd = false,
+        IdleAgeBucket = IdleAgeBucket.UnderTwoMinutes,
+        LeaseSeconds = 30,
+        Capabilities = Capability.Text,
+    };
+
+    [Fact]
+    public async Task Tick_ApprovedConnection_WithPresenceProvider_SendsPresenceFrame_Immediately()
+    {
+        using var remoteCert = SelfSignedCert();
+        var approvedPeer = MakeApprovedPeer(remoteCert);
+        var connector = new FakeConnector();
+        var connection = new FakeTransportConnection(remoteCert);
+        connector.NextConnection = connection;
+        connection.EnqueueReceive(Hello.Current(Capability.Text).ToFrame(Guid.NewGuid()));
+
+        var channel = new PeerControlChannel(
+            connector, LocalSpki(), Capability.Text, () => [approvedPeer],
+            presenceLeaseProvider: SamplePresenceLease);
+        channel.OnDiscovered();
+        await channel.EvaluateConnectAsync(RemoteEndpoint, RemoteSpkiForTieBreak(), CancellationToken.None);
+        Assert.IsType<ConnectionTrust.Approved>(channel.Trust);
+
+        // A fresh connection is a meaningful change — the very next Tick
+        // sends presence without waiting a full heartbeat interval.
+        channel.Tick(DateTimeOffset.UtcNow);
+
+        Assert.Contains(connection.Sent, f => f.Type == ControlMessageType.Presence);
+
+        await channel.DisposeAsync();
+    }
+
+    [Fact]
+    public async Task Tick_PairingOnlyConnection_NeverSendsPresence_EvenWithProviderConfigured()
+    {
+        // Hard privacy rule (docs/research/active-device-presence.md): no
+        // contact/DND/activity data in unauthenticated/pairing traffic.
+        using var remoteCert = SelfSignedCert();
+        var connector = new FakeConnector();
+        var connection = new FakeTransportConnection(remoteCert);
+        connector.NextConnection = connection;
+        connection.EnqueueReceive(Hello.Current(Capability.Text).ToFrame(Guid.NewGuid()));
+
+        var channel = new PeerControlChannel(
+            connector, LocalSpki(), Capability.Text, () => [], // empty registry -> PairingOnly
+            presenceLeaseProvider: SamplePresenceLease);
+        channel.OnDiscovered();
+        await channel.EvaluateConnectAsync(RemoteEndpoint, RemoteSpkiForTieBreak(), CancellationToken.None);
+        Assert.IsType<ConnectionTrust.PairingOnly>(channel.Trust);
+
+        channel.Tick(DateTimeOffset.UtcNow);
+        channel.NotifyPresenceChanged();
+        channel.Tick(DateTimeOffset.UtcNow);
+
+        Assert.DoesNotContain(connection.Sent, f => f.Type == ControlMessageType.Presence);
+
+        await channel.DisposeAsync();
+    }
+
+    [Fact]
+    public async Task Tick_ApprovedConnection_NoPresenceProviderConfigured_NeverSendsPresence()
+    {
+        using var remoteCert = SelfSignedCert();
+        var approvedPeer = MakeApprovedPeer(remoteCert);
+        var connector = new FakeConnector();
+        var connection = new FakeTransportConnection(remoteCert);
+        connector.NextConnection = connection;
+        connection.EnqueueReceive(Hello.Current(Capability.Text).ToFrame(Guid.NewGuid()));
+
+        var channel = new PeerControlChannel(connector, LocalSpki(), Capability.Text, () => [approvedPeer]); // no presenceLeaseProvider
+        channel.OnDiscovered();
+        await channel.EvaluateConnectAsync(RemoteEndpoint, RemoteSpkiForTieBreak(), CancellationToken.None);
+
+        channel.Tick(DateTimeOffset.UtcNow);
+
+        Assert.DoesNotContain(connection.Sent, f => f.Type == ControlMessageType.Presence);
+
+        await channel.DisposeAsync();
+    }
+
+    [Fact]
+    public async Task Tick_TwiceInQuickSuccession_WithoutMeaningfulChange_OnlySendsPresenceOnce()
+    {
+        using var remoteCert = SelfSignedCert();
+        var approvedPeer = MakeApprovedPeer(remoteCert);
+        var connector = new FakeConnector();
+        var connection = new FakeTransportConnection(remoteCert);
+        connector.NextConnection = connection;
+        connection.EnqueueReceive(Hello.Current(Capability.Text).ToFrame(Guid.NewGuid()));
+
+        var channel = new PeerControlChannel(
+            connector, LocalSpki(), Capability.Text, () => [approvedPeer],
+            presenceLeaseProvider: SamplePresenceLease);
+        channel.OnDiscovered();
+        await channel.EvaluateConnectAsync(RemoteEndpoint, RemoteSpkiForTieBreak(), CancellationToken.None);
+
+        var now = DateTimeOffset.UtcNow;
+        channel.Tick(now); // sends immediately (fresh connection)
+        channel.Tick(now); // same instant — cadence/jitter interval hasn't elapsed, not forced
+
+        Assert.Single(connection.Sent, f => f.Type == ControlMessageType.Presence);
+
+        await channel.DisposeAsync();
+    }
+
+    [Fact]
+    public async Task NotifyPresenceChanged_ForcesAnOutOfCadenceSend_OnNextTick()
+    {
+        using var remoteCert = SelfSignedCert();
+        var approvedPeer = MakeApprovedPeer(remoteCert);
+        var connector = new FakeConnector();
+        var connection = new FakeTransportConnection(remoteCert);
+        connector.NextConnection = connection;
+        connection.EnqueueReceive(Hello.Current(Capability.Text).ToFrame(Guid.NewGuid()));
+
+        var channel = new PeerControlChannel(
+            connector, LocalSpki(), Capability.Text, () => [approvedPeer],
+            presenceLeaseProvider: SamplePresenceLease);
+        channel.OnDiscovered();
+        await channel.EvaluateConnectAsync(RemoteEndpoint, RemoteSpkiForTieBreak(), CancellationToken.None);
+
+        var now = DateTimeOffset.UtcNow;
+        channel.Tick(now); // the immediate post-connect send
+        Assert.Single(connection.Sent, f => f.Type == ControlMessageType.Presence);
+
+        channel.NotifyPresenceChanged();
+        channel.Tick(now); // same instant, but forced -> sends again despite cadence
+
+        Assert.Equal(2, connection.Sent.Count(f => f.Type == ControlMessageType.Presence));
 
         await channel.DisposeAsync();
     }

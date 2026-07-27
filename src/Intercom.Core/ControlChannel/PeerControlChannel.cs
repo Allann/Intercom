@@ -1,5 +1,6 @@
 using System.Net;
 using Intercom.Identity;
+using Intercom.Presence;
 
 namespace Intercom.ControlChannel;
 
@@ -29,9 +30,24 @@ namespace Intercom.ControlChannel;
 /// app-shell connection-routing wiring, deliberately left out of this
 /// ticket's scope (see the #21 report); <see cref="AcceptInboundAsync"/> is
 /// what such a router would call once it has made that determination.
+///
+/// Issue #23 adds one more per-connection periodic concern on top of the
+/// existing heartbeat/lease: a presence broadcast, reusing this same
+/// <see cref="Tick"/>-driven cadence rather than a second parallel timer.
+/// When constructed with a non-null <paramref name="presenceLeaseProvider"/>
+/// (see the constructor), every <see cref="Tick"/> call also checks whether
+/// a fresh presence frame is due for the current connection and, if so,
+/// best-effort sends one — but ONLY while <see cref="Trust"/> is
+/// <see cref="ConnectionTrust.Approved"/> (docs/research/active-device-
+/// presence.md's hard privacy rule: presence must never be sent during
+/// pairing or before a connection is authenticated).
 /// </summary>
 public sealed class PeerControlChannel : IAsyncDisposable
 {
+    // Presence jitter is not security-sensitive (unlike issue #22's pairing
+    // nonces) — an ordinary PRNG is the appropriate, simpler choice here.
+    static readonly Random PresenceJitterRandom = new();
+
     readonly PeerConnectionStateMachine _stateMachine = new();
     readonly IPeerTransportConnector _connector;
     readonly SpkiPin _localSpki;
@@ -39,6 +55,7 @@ public sealed class PeerControlChannel : IAsyncDisposable
     readonly Func<IReadOnlyList<ApprovedPeer>> _approvedPeers;
     readonly ApprovedPeer? _expectedApprovedPeer;
     readonly Func<DateTimeOffset> _clock;
+    readonly Func<PresenceLease>? _presenceLeaseProvider;
 
     // Guards the fields below and serializes "am I already mid-handshake"
     // decisions between EvaluateConnectAsync and AcceptInboundAsync, which
@@ -53,6 +70,12 @@ public sealed class PeerControlChannel : IAsyncDisposable
     CancellationTokenSource? _receiveLoopCts;
     bool _handshakeInFlight;
     bool _disposed;
+
+    // Presence-send scheduling state, guarded by _gate alongside the
+    // connection fields above — a presence send must never race a
+    // connection being torn down/replaced.
+    DateTimeOffset _nextPresenceSendAt = DateTimeOffset.MinValue;
+    bool _forcePresenceSend;
 
     public ConnState State => _stateMachine.State;
 
@@ -85,7 +108,8 @@ public sealed class PeerControlChannel : IAsyncDisposable
         Capability localCapabilities,
         Func<IReadOnlyList<ApprovedPeer>> approvedPeers,
         ApprovedPeer? expectedApprovedPeer = null,
-        Func<DateTimeOffset>? clock = null)
+        Func<DateTimeOffset>? clock = null,
+        Func<PresenceLease>? presenceLeaseProvider = null)
     {
         _connector = connector;
         _localSpki = localSpki;
@@ -93,6 +117,7 @@ public sealed class PeerControlChannel : IAsyncDisposable
         _approvedPeers = approvedPeers;
         _expectedApprovedPeer = expectedApprovedPeer;
         _clock = clock ?? (() => DateTimeOffset.UtcNow);
+        _presenceLeaseProvider = presenceLeaseProvider;
     }
 
     /// <summary>The peer became visible via discovery (issue #20). Does not
@@ -105,11 +130,62 @@ public sealed class PeerControlChannel : IAsyncDisposable
     public void OnResume() => _stateMachine.Resume();
     public void OnWifiChange() => _stateMachine.WifiChange();
 
-    /// <summary>Advances the heartbeat/lease clock. Callers drive this from
-    /// a periodic timer (e.g. every second) — this class never reads the
-    /// wall clock itself for lease evaluation, mirroring
+    /// <summary>Advances the heartbeat/lease clock, and (issue #23) checks
+    /// whether a fresh presence frame is due. Callers drive this from a
+    /// periodic timer (e.g. every second) — this class never reads the wall
+    /// clock itself for lease evaluation, mirroring
     /// <c>VisiblePeerList.EvaluateExpiry</c>'s explicit-clock pattern.</summary>
-    public void Tick(DateTimeOffset now) => _stateMachine.Tick(now);
+    public void Tick(DateTimeOffset now)
+    {
+        _stateMachine.Tick(now);
+        TrySendPresenceIfDue(now);
+    }
+
+    /// <summary>Requests an out-of-cadence presence send on the next
+    /// <see cref="Tick"/> — for a meaningful state change
+    /// (docs/research/active-device-presence.md: "immediate update on
+    /// meaningful state changes"), rather than waiting up to the full
+    /// jittered heartbeat interval. A no-op if no presence provider was
+    /// configured; harmless to call when not currently Approved — the next
+    /// Tick after a fresh connection becomes Approved already sends
+    /// immediately on its own (see <see cref="CompleteHandshakeAsync"/>).</summary>
+    public void NotifyPresenceChanged()
+    {
+        lock (_gate) { _forcePresenceSend = true; }
+    }
+
+    /// <summary>docs/research/active-device-presence.md: "heartbeat every 10
+    /// seconds"; reuses <see cref="PeerConnectionStateMachine.HeartbeatInterval"/>
+    /// (the SAME constant driving connection-liveness heartbeats) rather
+    /// than inventing a second cadence, with a small random jitter so peers
+    /// don't send in lockstep.</summary>
+    static TimeSpan JitteredPresenceInterval() =>
+        PeerConnectionStateMachine.HeartbeatInterval + TimeSpan.FromMilliseconds(PresenceJitterRandom.Next(-1000, 1000));
+
+    void TrySendPresenceIfDue(DateTimeOffset now)
+    {
+        if (_presenceLeaseProvider is null) return;
+
+        IPeerTransportConnection connection;
+        lock (_gate)
+        {
+            // Hard privacy rule (docs/research/active-device-presence.md):
+            // presence is sent ONLY over an already-Approved connection —
+            // never during pairing (PairingOnly), never before a connection
+            // exists.
+            if (_trust is not ConnectionTrust.Approved || _connection is null) return;
+
+            var due = _forcePresenceSend || now >= _nextPresenceSendAt;
+            if (!due) return;
+
+            connection = _connection;
+            _forcePresenceSend = false;
+            _nextPresenceSendAt = now + JitteredPresenceInterval();
+        }
+
+        var lease = _presenceLeaseProvider();
+        _ = TrySendAsync(connection, lease.ToFrame(Guid.NewGuid()));
+    }
 
     /// <summary>Applies the deterministic tie-break and dials out if — and
     /// only if — this device is the initiator for <paramref name="remoteSpki"/>.
@@ -258,6 +334,13 @@ public sealed class PeerControlChannel : IAsyncDisposable
             _dispatcher = dispatcher;
             _trust = trust;
             _receiveLoopCts = receiveLoopCts;
+
+            // A fresh connection is itself a meaningful change — send
+            // presence on the very next Tick rather than waiting up to a
+            // full jittered heartbeat interval (no-op if this connection
+            // isn't Approved or no provider was configured; TrySendPresenceIfDue
+            // re-checks both).
+            _forcePresenceSend = true;
         }
 
         _stateMachine.ConnectOk(incarnation, _clock());

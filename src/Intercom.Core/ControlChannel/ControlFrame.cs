@@ -2,10 +2,10 @@ namespace Intercom.ControlChannel;
 
 /// <summary>
 /// Wire message types this ticket defines. Later tickets add more values
-/// here as they need them (pairing traffic — issue #22; presence — #23;
-/// chat — #24; attention cards — #25) — this module only assigns meaning to
-/// Hello and Delivered; any other value decodes fine (an enum has no closed
-/// set of valid underlying values) and is dispatched generically by
+/// here as they need them (pairing traffic — issue #22; chat — #24;
+/// attention cards — #25) — this module only assigns meaning to Hello and
+/// Delivered; any other value decodes fine (an enum has no closed set of
+/// valid underlying values) and is dispatched generically by
 /// <see cref="FrameDispatcher"/>/<see cref="PeerControlChannel"/> without
 /// needing to understand its payload.
 /// </summary>
@@ -45,6 +45,18 @@ public enum ControlMessageType : ushort
     /// <see cref="FrameDispatcher.IsPairingPermitted"/> entry — Approved
     /// connections already accept every message type.</summary>
     Forgotten = 6,
+
+    /// <summary>Issue #23: a periodic authenticated presence/DND lease. Sent
+    /// only over an already-<see cref="ConnectionTrust.Approved"/>
+    /// connection — never during pairing, never in unauthenticated mDNS
+    /// discovery (docs/research/active-device-presence.md's privacy rules;
+    /// enforced by <see cref="PeerControlChannel"/>, which only ever sends
+    /// this frame type when its own trust is Approved, and by
+    /// <see cref="FrameDispatcher.IsPairingPermitted"/> not listing it, so a
+    /// <see cref="ConnectionTrust.PairingOnly"/> connection rejects one on
+    /// receipt too). Encoded/decoded by
+    /// <c>Intercom.Presence.PresenceFrameCodec</c>.</summary>
+    Presence = 7,
 }
 
 /// <summary>

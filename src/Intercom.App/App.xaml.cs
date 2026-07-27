@@ -1,9 +1,12 @@
 using Microsoft.UI.Xaml;
 using Microsoft.Windows.AppLifecycle;
+using Intercom.ControlChannel;
 using Intercom.Diagnostics;
 using Intercom.Discovery;
 using Intercom.Identity;
 using Intercom.Lifecycle;
+using Intercom.Presence;
+using Intercom.App.Presence;
 using Intercom.App.Startup;
 using Intercom.App.Tray;
 
@@ -22,7 +25,10 @@ public partial class App : Application
     MainWindow? _mainWindow;
 
     readonly AppLifecycle _lifecycle;
+    readonly DndSettingsStore _dndSettings = new();
     DiscoveryService? _discoveryService;
+    PresenceEngine? _presenceEngine;
+    SessionMessagePump? _sessionMessagePump;
 
     Microsoft.UI.Dispatching.DispatcherQueue? _uiDispatcherQueue;
 
@@ -68,8 +74,52 @@ public partial class App : Application
         _mainWindow?.AttachIdentityStore(_lifecycle.IdentityStore);
 
         StartDiscovery();
+        StartPresence();
 
         Program.RedirectedActivationReceived += OnRedirectedActivation;
+    }
+
+    /// <summary>Issue #23: local availability + DND state, and the Win32
+    /// session/power/shutdown signals that drive it. Deliberately does NOT
+    /// yet broadcast presence to any live peer — there is no live,
+    /// multi-peer <see cref="PeerControlChannel"/> roster in this app shell
+    /// today (control-channel connection routing was explicitly deferred by
+    /// issue #21's own scope note — see PeerControlChannel's class doc —
+    /// and #23 depends only on #21, not on that routing infrastructure
+    /// existing). <see cref="PeerControlChannel"/> already has the send-side
+    /// hook fully implemented and tested (see PeerControlChannelTests); once
+    /// a connection-routing/roster ticket exists, wiring
+    /// <c>_presenceEngine.NextLease</c> in as each channel's
+    /// presenceLeaseProvider, and <c>_presenceEngine.MeaningfulStateChanged</c>
+    /// to call <c>NotifyPresenceChanged()</c> across that roster, is a
+    /// small, mechanical addition — not a redesign.</summary>
+    void StartPresence()
+    {
+        _dndSettings.Load();
+
+        _presenceEngine = new PresenceEngine(
+            deviceId: _lifecycle.Identity.PeerId,
+            idleTimeProvider: new Win32IdleTimeProvider(),
+            dndSettings: _dndSettings,
+            // No feature capability is actually implemented yet (#24 text,
+            // #29 voice) — reflect that honestly rather than advertising
+            // something this build can't do.
+            capabilities: Capability.None);
+
+        if (_mainWindow is not null)
+        {
+            _sessionMessagePump = new SessionMessagePump(_mainWindow.Hwnd);
+            _sessionMessagePump.SessionBecameUnusable += _presenceEngine.OnSessionBecameUnusable;
+            _sessionMessagePump.SessionBecameUsable += _presenceEngine.OnSessionBecameUsable;
+            _sessionMessagePump.Suspending += _presenceEngine.OnSuspending;
+            _sessionMessagePump.ResumedAutomatic += _presenceEngine.OnResumedAutomatic;
+            _sessionMessagePump.ResumedByUser += _presenceEngine.OnSessionBecameUsable;
+            _sessionMessagePump.EndingSession += _presenceEngine.OnQueryEndSession;
+
+            _mainWindow.AttachPresence(_dndSettings);
+        }
+
+        _presenceEngine.Start();
     }
 
     /// <summary>Issue #20: makes discovered-but-unapproved local peers
@@ -110,6 +160,8 @@ public partial class App : Application
             _discoveryService.VisiblePeersChanged -= OnVisiblePeersChanged;
             _discoveryService.Dispose();
         }
+        _sessionMessagePump?.Dispose();
+        _presenceEngine?.Dispose();
         _lifecycle.Quit();
         Exit();
     }

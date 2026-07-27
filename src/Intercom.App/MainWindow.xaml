@@ -25,5 +25,18 @@
         <!-- Issue #22: Postcard Badges pairing ceremony + Rolodex, opened as
              a modal over the shell, per docs/mvp-specification.md §7. -->
         <Button x:Name="AddFamilyMemberButton" Content="+ Add Family Member" Margin="0,16,0,0" Click="OnAddFamilyMemberClick" />
+
+        <!-- Issue #23: the flippable Available/DND sign
+             (intercom-shell-prototype.html's va-sign/vaToggleDnd), wired to
+             the real, persisted DndSettingsStore via AttachPresence — not a
+             mock toggle. Colors/text are set in code-behind (RenderDndSign)
+             since they change at runtime. -->
+        <Button
+            x:Name="DndSignButton"
+            Content="Available"
+            FontWeight="Bold"
+            HorizontalAlignment="Center"
+            Margin="0,16,0,0"
+            Click="OnToggleDndClick" />
     </StackPanel>
 </Window>
