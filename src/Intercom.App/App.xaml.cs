@@ -1,5 +1,6 @@
 using Microsoft.UI.Xaml;
 using Microsoft.Windows.AppLifecycle;
+using Intercom.Chat;
 using Intercom.ControlChannel;
 using Intercom.Diagnostics;
 using Intercom.Discovery;
@@ -26,6 +27,7 @@ public partial class App : Application
 
     readonly AppLifecycle _lifecycle;
     readonly DndSettingsStore _dndSettings = new();
+    readonly ChatTtsSettingsStore _chatTtsSettings = new();
     DiscoveryService? _discoveryService;
     PresenceEngine? _presenceEngine;
     SessionMessagePump? _sessionMessagePump;
@@ -75,6 +77,7 @@ public partial class App : Application
 
         StartDiscovery();
         StartPresence();
+        StartChat();
 
         Program.RedirectedActivationReceived += OnRedirectedActivation;
     }
@@ -120,6 +123,20 @@ public partial class App : Application
         }
 
         _presenceEngine.Start();
+    }
+
+    /// <summary>Issue #24: loads the real, persisted per-peer spoken-chat
+    /// (local TTS) preference and gives MainWindow's chat drawer access to
+    /// it — the same real-store-not-a-mock pattern <see cref="StartPresence"/>
+    /// already uses for <see cref="_dndSettings"/>. The chat send/receive
+    /// pipeline itself is wired up inside MainWindow (see
+    /// MainWindow.InitializeChatDrawer) against an in-process loopback
+    /// stand-in, for the same "no live multi-peer connection roster yet"
+    /// reason <see cref="StartPresence"/>'s doc comment explains.</summary>
+    void StartChat()
+    {
+        _chatTtsSettings.Load();
+        _mainWindow?.AttachChat(_chatTtsSettings);
     }
 
     /// <summary>Issue #20: makes discovered-but-unapproved local peers

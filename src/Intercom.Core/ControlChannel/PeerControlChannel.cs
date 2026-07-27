@@ -93,8 +93,19 @@ public sealed class PeerControlChannel : IAsyncDisposable
 
     /// <summary>Raised for every accepted inbound application frame (i.e.
     /// past Hello-ordering and trust-mode checks) — Hello and Delivered
-    /// receipts are handled internally and not re-surfaced here.</summary>
+    /// receipts are handled internally and not re-surfaced here (Delivered
+    /// is surfaced separately via <see cref="DeliveryConfirmed"/>).</summary>
     public event Action<ControlFrame>? MessageReceived;
+
+    /// <summary>Issue #24: raised with the MessageId of one of THIS side's
+    /// own previously-sent frames the instant the peer's mechanical
+    /// <see cref="ControlMessageType.Delivered"/> receipt for it arrives —
+    /// what lets a caller (e.g. the chat drawer) show a message as delivered
+    /// while still connected. Never raised for Hello. Not surfaced via
+    /// <see cref="MessageReceived"/> since a Delivered receipt is protocol
+    /// meta-traffic, not an application message a caller should try to
+    /// decode as one.</summary>
+    public event Action<Guid>? DeliveryConfirmed;
 
     /// <summary>Raised when a connection expected to reach a specific,
     /// previously-approved peer instead presented a certificate with a
@@ -291,7 +302,12 @@ public sealed class PeerControlChannel : IAsyncDisposable
         var dispatcher = new FrameDispatcher(trust);
         dispatcher.FrameAccepted += frame =>
         {
-            if (frame.Type is not (ControlMessageType.Hello or ControlMessageType.Delivered))
+            if (frame.Type == ControlMessageType.Delivered)
+            {
+                if (frame.CorrelationId is Guid correlationId) DeliveryConfirmed?.Invoke(correlationId);
+                return;
+            }
+            if (frame.Type is not ControlMessageType.Hello)
             {
                 MessageReceived?.Invoke(frame);
             }

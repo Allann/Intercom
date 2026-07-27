@@ -57,6 +57,15 @@ public enum ControlMessageType : ushort
     /// receipt too). Encoded/decoded by
     /// <c>Intercom.Presence.PresenceFrameCodec</c>.</summary>
     Presence = 7,
+
+    /// <summary>Issue #24: one plain-text chat message to a specific
+    /// approved peer (this ticket is not group chat). Gets the mechanical
+    /// <see cref="Delivered"/> receipt for free from <see cref="FrameDispatcher"/>
+    /// like every other non-meta message type — no separate read receipt
+    /// (ADR-0001, CONTEXT.md's "Conversation"/"Spoken chat"). Sent only over
+    /// an already-<see cref="ConnectionTrust.Approved"/> connection. Encoded/
+    /// decoded by <c>Intercom.Chat.ChatFrameCodec</c>.</summary>
+    Chat = 8,
 }
 
 /// <summary>

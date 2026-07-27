@@ -38,5 +38,87 @@
             HorizontalAlignment="Center"
             Margin="0,16,0,0"
             Click="OnToggleDndClick" />
+
+        <!-- Issue #24: the chat drawer (intercom-shell-prototype.html's
+             va-chat/va-msg), part of the same Console Panel shell per
+             docs/mvp-specification.md §7. This section uses the fixed
+             cream/ink/teal "postcard" palette rather than the shell's default
+             theme-inherited brushes, so RequestedTheme="Light" plus explicit
+             Foreground/Background on every element below, exactly like
+             PairingDialog — see that file's doc comment for why. No live
+             multi-peer connection roster exists in this app shell yet (the
+             same gap #23's report flagged), so this drawer is wired to a
+             real ChatService/ChatFrameCodec/FrameDispatcher pipeline running
+             against an in-process LoopbackChatTransport pair standing in for
+             a second device — see ChatDrawerDemo's doc comment. -->
+        <Border
+            Background="#FFFBF4E4"
+            BorderBrush="#FF2B1D14"
+            BorderThickness="3"
+            CornerRadius="12"
+            Padding="12"
+            Margin="0,16,0,0"
+            Width="360"
+            RequestedTheme="Light">
+            <StackPanel Spacing="8">
+                <TextBlock Text="CHAT" FontWeight="Bold" FontSize="12" Foreground="#FFB6502F" />
+                <TextBlock
+                    Text="No second physical device is available in this environment, so this drawer runs a real send/receive/delivery-receipt pipeline against an in-process loopback stand-in for the peer's device."
+                    TextWrapping="Wrap"
+                    FontSize="10"
+                    Opacity="0.65"
+                    Foreground="#FF2B1D14" />
+
+                <CheckBox
+                    x:Name="SpokenChatCheckBox"
+                    Content="Read incoming messages aloud (spoken chat)"
+                    Foreground="#FF2B1D14"
+                    Checked="OnSpokenChatToggled"
+                    Unchecked="OnSpokenChatToggled" />
+
+                <TextBlock
+                    x:Name="ChatChimeNotice"
+                    Text="🔔 New message"
+                    FontSize="11"
+                    FontWeight="Bold"
+                    Foreground="#FFB6502F"
+                    Visibility="Collapsed" />
+
+                <ScrollViewer x:Name="ChatScrollViewer" MaxHeight="220">
+                    <StackPanel x:Name="ChatMessagesPanel" Spacing="6" />
+                </ScrollViewer>
+
+                <StackPanel Orientation="Horizontal" Spacing="6">
+                    <TextBox
+                        x:Name="ChatInputBox"
+                        Width="230"
+                        PlaceholderText="Type a message..."
+                        Foreground="#FF2B1D14"
+                        Background="#FFFBF4E4"
+                        KeyDown="OnChatInputKeyDown" />
+                    <Button
+                        x:Name="ChatSendButton"
+                        Content="Send"
+                        Background="#FF2F6F6B"
+                        Foreground="#FFFBF4E4"
+                        Click="OnChatSendClick" />
+                </StackPanel>
+
+                <Button
+                    x:Name="SimulatePeerReplyButton"
+                    Content="Simulate peer reply"
+                    FontSize="10"
+                    Background="#FFE8A33D"
+                    Foreground="#FF2B1D14"
+                    Click="OnSimulatePeerReplyClick" />
+                <Button
+                    x:Name="SimulateDropButton"
+                    Content="Simulate connection drop (for in-flight sends)"
+                    FontSize="10"
+                    Background="#FFC1443A"
+                    Foreground="#FFFBF4E4"
+                    Click="OnSimulateDropClick" />
+            </StackPanel>
+        </Border>
     </StackPanel>
 </Window>

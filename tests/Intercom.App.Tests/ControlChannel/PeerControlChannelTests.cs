@@ -2,6 +2,7 @@ using System.Net;
 using System.Security.Cryptography;
 using System.Security.Cryptography.X509Certificates;
 using System.Threading.Channels;
+using Intercom.Chat;
 using Intercom.ControlChannel;
 using Intercom.Identity;
 using Intercom.Presence;
@@ -171,6 +172,42 @@ public class PeerControlChannelTests
     }
 
     [Fact]
+    public async Task ReceiveLoop_InboundDeliveredFrame_RaisesDeliveryConfirmed_NotMessageReceived()
+    {
+        using var remoteCert = SelfSignedCert();
+        var approvedPeer = MakeApprovedPeer(remoteCert);
+        var connector = new FakeConnector();
+        var connection = new FakeTransportConnection(remoteCert);
+        connector.NextConnection = connection;
+        connection.EnqueueReceive(Hello.Current(Capability.Text).ToFrame(Guid.NewGuid()));
+
+        var channel = new PeerControlChannel(connector, LocalSpki(), Capability.Text, () => [approvedPeer]);
+        channel.OnDiscovered();
+        var confirmed = new TaskCompletionSource<Guid>();
+        channel.DeliveryConfirmed += id => confirmed.TrySetResult(id);
+        var received = new List<ControlFrame>();
+        channel.MessageReceived += received.Add;
+
+        await channel.EvaluateConnectAsync(RemoteEndpoint, RemoteSpkiForTieBreak(), CancellationToken.None);
+
+        var originalMessageId = Guid.NewGuid();
+        var deliveredFrame = new ControlFrame
+        {
+            Type = ControlMessageType.Delivered,
+            MessageId = Guid.NewGuid(),
+            CorrelationId = originalMessageId,
+            Payload = [],
+        };
+        connection.EnqueueReceive(deliveredFrame);
+
+        var confirmedId = await confirmed.Task.WaitAsync(WaitTimeout);
+        Assert.Equal(originalMessageId, confirmedId);
+        Assert.Empty(received); // Delivered is meta-traffic, never surfaced as MessageReceived
+
+        await channel.DisposeAsync();
+    }
+
+    [Fact]
     public async Task ReceiveLoop_PeerClosesCleanly_DropsToReconnecting()
     {
         using var remoteCert = SelfSignedCert();
@@ -222,6 +259,43 @@ public class PeerControlChannelTests
 
         await dropped.Task.WaitAsync(WaitTimeout);
         Assert.Empty(received);
+
+        await channel.DisposeAsync();
+    }
+
+    // ---- issue #24: PeerControlChannelChatTransport ----
+
+    [Fact]
+    public async Task ChatTransport_ConnectionDropped_OnlyFiresOnGenuineDropFromConnected_NotDuringOrdinaryHandshaking()
+    {
+        // Regression guard: StateChanged fires on EVERY transition (Idle ->
+        // Discovered, Discovered -> Connecting, Connecting -> Connected are
+        // all "not Connected" or "not the OLD state" at some point) — a
+        // naive "next state isn't Connected" check would fire
+        // ConnectionDropped spuriously while a connection is still being
+        // established for the very first time, before anything was ever
+        // sent. It must only fire when the PREVIOUS state was Connected.
+        using var remoteCert = SelfSignedCert();
+        var approvedPeer = MakeApprovedPeer(remoteCert);
+        var connector = new FakeConnector();
+        var connection = new FakeTransportConnection(remoteCert);
+        connector.NextConnection = connection;
+        connection.EnqueueReceive(Hello.Current(Capability.Text).ToFrame(Guid.NewGuid()));
+
+        var channel = new PeerControlChannel(connector, LocalSpki(), Capability.Text, () => [approvedPeer]);
+        var chatTransport = new PeerControlChannelChatTransport(channel);
+        var dropCount = 0;
+        chatTransport.ConnectionDropped += () => dropCount++;
+
+        channel.OnDiscovered();
+        await channel.EvaluateConnectAsync(RemoteEndpoint, RemoteSpkiForTieBreak(), CancellationToken.None);
+        Assert.IsType<ConnState.Connected>(channel.State);
+        Assert.Equal(0, dropCount); // establishing the very first connection is not a "drop"
+
+        connection.EnqueueClose();
+        await WaitUntilAsync(() => channel.State is ConnState.Reconnecting);
+
+        Assert.Equal(1, dropCount); // the actual drop from Connected fired exactly once
 
         await channel.DisposeAsync();
     }
