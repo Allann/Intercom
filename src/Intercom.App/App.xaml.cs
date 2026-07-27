@@ -1,6 +1,7 @@
 using Microsoft.UI.Xaml;
 using Microsoft.Windows.AppLifecycle;
 using Intercom.App.Diagnostics;
+using Intercom.App.Identity;
 using Intercom.App.Startup;
 using Intercom.App.Tray;
 
@@ -14,6 +15,7 @@ public partial class App : Application
     TrayIcon? _trayIcon;
     TrayMessagePump? _trayPump;
     readonly CrashMarker _crashMarker = new();
+    readonly IdentityStore _identityStore = new();
     bool _crashNoticePending;
 
     public App()
@@ -24,6 +26,14 @@ public partial class App : Application
     protected override void OnLaunched(LaunchActivatedEventArgs args)
     {
         _crashNoticePending = _crashMarker.ClosedUnexpectedlyLastTime();
+
+        _identityStore.LoadOrCreate();
+        if (_identityStore.IdentityWasRegenerated)
+        {
+            // TODO(#22 pairing ceremony): surface this via the shell UI — every
+            // previously approved peer is now unknown and needs re-pairing.
+            System.Diagnostics.Debug.WriteLine("Local identity was unreadable and has been regenerated.");
+        }
 
         _window = new MainWindow();
         _window.QuitRequested += OnQuitRequested;
