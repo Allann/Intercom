@@ -12,7 +12,15 @@ A person the local user can reach. A contact may own multiple approved peers, al
 
 ## Approved peer
 
-A peer whose first-contact request has been explicitly accepted on this app instance. Approval is remembered locally. Discovery alone does not grant permission to open audio, send chat, or trigger an attention request.
+A peer whose first-contact request has been explicitly accepted on this app instance. Approval is remembered locally. Discovery alone does not grant permission to open audio, send chat, or trigger an attention request. Approval is asymmetric: forgetting a peer removes it from this instance only, and the other side remains approved until it independently forgets in return.
+
+## Pairing ceremony
+
+The first-contact ritual in which two peers each display a verification code and both people confirm the codes match before either side is added as an approved peer. A pairing request expires if not confirmed on both sides, and either side may explicitly reject it rather than let it expire.
+
+## Verification code
+
+The short code both people compare during a pairing ceremony to confirm they are approving the intended device rather than an impostor. Displayed identically on both peers.
 
 ## Family
 
