@@ -1,4 +1,4 @@
-namespace Intercom.App.Identity;
+namespace Intercom.Identity;
 
 /// <summary>
 /// The set of peers this device has approved. In-memory only — IdentityStore

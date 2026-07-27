@@ -1,4 +1,4 @@
-namespace Intercom.App.Identity;
+namespace Intercom.Identity;
 
 /// <summary>
 /// In-progress pairing ceremonies. ADR-0002: one outstanding request per peer
@@ -14,9 +14,13 @@ public sealed class PendingPairingRegistry
     public IReadOnlyList<PendingPairing> Pending => _pending;
 
     /// <summary>False if a request for this peer is already outstanding
-    /// (ADR-0002: one outstanding request per peer identity).</summary>
+    /// (ADR-0002: one outstanding request per peer identity). An existing but
+    /// expired request for the same peer never counts as outstanding — it's
+    /// pruned first, so a stale request can't block a fresh attempt
+    /// indefinitely regardless of whether RemoveExpired was called first.</summary>
     public bool TryStart(Guid peerId, DateTimeOffset now)
     {
+        _pending.RemoveAll(p => p.PeerId == peerId && p.IsExpired(ExpiryTimeout, now));
         if (_pending.Any(p => p.PeerId == peerId)) return false;
         _pending.Add(new PendingPairing { PeerId = peerId, StartedAt = now });
         return true;

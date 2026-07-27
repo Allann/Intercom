@@ -1,7 +1,7 @@
 using System.Text.Json;
 using System.Text.Json.Serialization;
 
-namespace Intercom.App.Identity;
+namespace Intercom.Identity;
 
 /// <summary>
 /// SpkiPin wraps a private byte[] with no public settable member, so default

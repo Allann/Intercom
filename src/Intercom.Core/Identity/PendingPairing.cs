@@ -1,4 +1,4 @@
-namespace Intercom.App.Identity;
+namespace Intercom.Identity;
 
 /// <summary>
 /// A pairing ceremony in progress with a peer, not yet approved. Persisted so
@@ -12,5 +12,5 @@ public sealed record PendingPairing
     public required Guid PeerId { get; init; }
     public required DateTimeOffset StartedAt { get; init; }
 
-    public bool IsExpired(TimeSpan timeout, DateTimeOffset now) => now - StartedAt > timeout;
+    public bool IsExpired(TimeSpan timeout, DateTimeOffset now) => now - StartedAt >= timeout;
 }

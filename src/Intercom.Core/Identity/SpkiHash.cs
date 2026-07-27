@@ -1,7 +1,7 @@
 using System.Security.Cryptography;
 using System.Security.Cryptography.X509Certificates;
 
-namespace Intercom.App.Identity;
+namespace Intercom.Identity;
 
 /// <summary>
 /// SHA-256 over a certificate's DER-encoded SubjectPublicKeyInfo. Per ADR-0002,

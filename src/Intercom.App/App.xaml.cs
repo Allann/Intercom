@@ -1,7 +1,7 @@
 using Microsoft.UI.Xaml;
 using Microsoft.Windows.AppLifecycle;
 using Intercom.App.Diagnostics;
-using Intercom.App.Identity;
+using Intercom.Identity;
 using Intercom.App.Startup;
 using Intercom.App.Tray;
 
@@ -40,6 +40,10 @@ public partial class App : Application
             // still valid, but the approved-peer list itself was unreadable
             // and every peer now needs re-pairing.
             System.Diagnostics.Debug.WriteLine("Approved-peer registry was unreadable and has been reset.");
+        }
+        if (_identityStore.PendingPairingsWereReset)
+        {
+            System.Diagnostics.Debug.WriteLine("Pending-pairing state was unreadable and has been reset.");
         }
 
         _window = new MainWindow();

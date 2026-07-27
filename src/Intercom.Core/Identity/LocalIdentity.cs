@@ -1,7 +1,7 @@
 using System.Security.Cryptography;
 using System.Security.Cryptography.X509Certificates;
 
-namespace Intercom.App.Identity;
+namespace Intercom.Identity;
 
 /// <summary>
 /// This device's own long-lived cryptographic identity: a self-signed ECDSA

@@ -1,4 +1,4 @@
-namespace Intercom.App.Identity;
+namespace Intercom.Identity;
 
 /// <summary>
 /// One peer this device has approved via the pairing ceremony (ADR-0002).

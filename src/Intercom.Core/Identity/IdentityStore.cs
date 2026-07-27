@@ -3,7 +3,7 @@ using System.Security.Cryptography.X509Certificates;
 using System.Text;
 using System.Text.Json;
 
-namespace Intercom.App.Identity;
+namespace Intercom.Identity;
 
 /// <summary>
 /// Owns this device's local identity, approved-peer registry, and in-progress
@@ -37,9 +37,10 @@ public sealed class IdentityStore
     public ApprovedPeerRegistry Registry { get; } = new();
     public PendingPairingRegistry PendingPairings { get; } = new();
 
-    /// <summary>True if this call generated a fresh identity because none
-    /// existed yet, because the existing one was unreadable, or because it
-    /// had expired.</summary>
+    /// <summary>True only when a previously-existing identity could not be
+    /// read (corrupted) or had expired — i.e. something was actually lost and
+    /// every approved peer now needs re-pairing. False on a genuinely fresh
+    /// install: there's nothing to lose, so nothing to warn about.</summary>
     public bool IdentityWasRegenerated { get; private set; }
 
     /// <summary>True if the approved-peer registry file existed but could not
@@ -47,6 +48,9 @@ public sealed class IdentityStore
     /// alongside a regenerated identity). Distinct from IdentityWasRegenerated
     /// so the two failure modes stay independently visible.</summary>
     public bool RegistryWasReset { get; private set; }
+
+    /// <summary>Same distinction as RegistryWasReset, for pending pairing state.</summary>
+    public bool PendingPairingsWereReset { get; private set; }
 
     public IdentityStore(string? appDataDirectory = null)
     {
@@ -62,13 +66,23 @@ public sealed class IdentityStore
     {
         var identityExistedBefore = File.Exists(_identityPath);
         var registryExistedBefore = File.Exists(_registryPath);
+        var pendingExistedBefore = File.Exists(_pendingPairingPath);
 
         var identity = TryLoadIdentity();
         if (identity is null)
         {
             IdentityWasRegenerated = identityExistedBefore;
-            DeleteIfExists(_registryPath); // old approvals are meaningless against a new identity
+
+            // Old approvals/pending requests are meaningless against a new
+            // identity. Clear the in-memory collections, not just the disk
+            // files — LoadOrCreate is not guaranteed to only ever run once
+            // against a fresh instance, and leaving stale in-memory state
+            // behind would silently carry it into the new identity.
+            Registry.ReplaceAll([]);
+            PendingPairings.ReplaceAll([]);
+            DeleteIfExists(_registryPath);
             DeleteIfExists(_pendingPairingPath);
+
             identity = LocalIdentity.CreateNew();
             PersistIdentity(identity);
             PersistRegistry(Registry.Peers); // establish an empty registry file now, not lazily on first mutation
@@ -78,9 +92,9 @@ public sealed class IdentityStore
 
         if (!IdentityWasRegenerated)
         {
-            // Only evaluate the registry independently when the identity itself
-            // loaded fine — if the identity was just regenerated, the registry
-            // was deliberately wiped above, not corrupted.
+            // Only evaluate the registry/pending state independently when the
+            // identity itself loaded fine — if the identity was just
+            // regenerated, both were deliberately wiped above, not corrupted.
             var peers = TryLoadRegistry();
             if (peers is not null)
             {
@@ -89,12 +103,30 @@ public sealed class IdentityStore
             else if (registryExistedBefore)
             {
                 RegistryWasReset = true;
+                // Replace the corrupt file immediately rather than leaving it
+                // to fail the same way on every future launch.
+                PersistRegistry(Registry.Peers);
             }
 
             var pending = TryLoadPendingPairings();
             if (pending is not null)
             {
                 PendingPairings.ReplaceAll(pending);
+            }
+            else if (pendingExistedBefore)
+            {
+                PendingPairingsWereReset = true;
+            }
+
+            // Prune expired requests on every load (ADR-0002: 2-minute expiry
+            // with no trust-state change) so a stale request from a previous
+            // session never lingers or blocks that peer indefinitely. Persist
+            // afterward whenever something changed, so a corrupt file gets
+            // replaced and pruned entries don't reappear next launch.
+            var prunedCount = PendingPairings.RemoveExpired(DateTimeOffset.UtcNow);
+            if (prunedCount > 0 || PendingPairingsWereReset)
+            {
+                SavePendingPairings();
             }
         }
     }
