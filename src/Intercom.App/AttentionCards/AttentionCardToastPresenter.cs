@@ -1,7 +1,14 @@
+using System.Text;
 using Intercom.AttentionCards;
 using Microsoft.UI.Dispatching;
+using Microsoft.UI.Xaml;
+using Microsoft.UI.Xaml.Controls;
+using Microsoft.UI.Xaml.Media;
+using Microsoft.UI.Xaml.Media.Imaging;
 using Microsoft.Windows.AppNotifications;
 using Microsoft.Windows.AppNotifications.Builder;
+using Windows.Graphics.Imaging;
+using Windows.Storage;
 
 namespace Intercom.App.AttentionCards;
 
@@ -107,23 +114,24 @@ public sealed class AttentionCardToastPresenter : IDisposable
     /// <c>InteractionKind.AttentionChime</c>; the card itself must still be
     /// queued/delivered regardless, which happens one layer down in
     /// <see cref="AttentionCardService"/> and is never gated by this
-    /// class).</summary>
-    public void Show(AttentionCard card, string fromLabel)
+    /// class).
+    ///
+    /// <para>Issue #34: rather than commissioning bespoke illustrated hero
+    /// art (a design asset this codebase has never shipped), the toast's
+    /// logo is the SAME per-card emoji glyph already used everywhere else a
+    /// card is shown — the composer's icon picker and
+    /// <c>MainWindow.BuildAttentionCardTile</c>'s shelf tile both render
+    /// <see cref="AttentionCard.Icon"/> as a plain text glyph, so the toast
+    /// does the same, just rasterized (toast logos are images, not text) via
+    /// <see cref="RenderIconAsync"/>.</para></summary>
+    public async Task ShowAsync(AttentionCard card, string fromLabel)
     {
         var cardId = card.MessageId.ToString();
+        var iconUri = await RenderIconAsync(card.Icon).ConfigureAwait(true);
 
         var builder = new AppNotificationBuilder()
             .AddArgument("cardId", cardId)
             .AddArgument("action", "Open")
-            // The research doc's proposed 320x320 illustrated hero art is a
-            // future DESIGN asset this ticket doesn't ship (no illustrator
-            // pass done here) — the packaged app logo stands in so the real
-            // SetHeroImage API path is still genuinely exercised end to end,
-            // per docs/research/windows-resident-app.md's own point that the
-            // asset is a source size, not a guaranteed rendered square, and
-            // Windows owns the actual toast layout regardless of what image
-            // is supplied.
-            .SetHeroImage(new Uri("ms-appx:///Assets/Square150x150Logo.png"))
             .AddText($"{card.Icon}  {card.Purpose}")
             .AddText($"from {fromLabel}")
             .SetAudioEvent(AppNotificationSoundEvent.Reminder)
@@ -137,7 +145,96 @@ public sealed class AttentionCardToastPresenter : IDisposable
                 .AddArgument("cardId", cardId)
                 .AddArgument("action", "Dismiss"));
 
+        if (iconUri is not null)
+        {
+            builder.SetAppLogoOverride(iconUri, AppNotificationImageCrop.Circle);
+        }
+
         AppNotificationManager.Default.Show(builder.BuildNotification());
+    }
+
+    /// <summary>Rasterizes <paramref name="icon"/> (a single emoji glyph, per
+    /// <see cref="Intercom.AttentionCards.AttentionCardPresets"/>) into a
+    /// small PNG under the app's local data folder, so it can be referenced
+    /// by a <c>file://</c> URI — <see cref="AppNotificationBuilder"/> only
+    /// accepts image URIs, never a raw string glyph. Results are cached on
+    /// disk per distinct glyph (the icon set is small and fixed), keyed by
+    /// the glyph's own codepoints so the filename is always filesystem-safe
+    /// without needing a lookup table.</summary>
+    static async Task<Uri?> RenderIconAsync(string icon)
+    {
+        try
+        {
+            var iconsFolder = await ApplicationData.Current.LocalFolder
+                .CreateFolderAsync("ToastIcons", CreationCollisionOption.OpenIfExists);
+            var fileName = CodepointFileName(icon);
+            var file = await iconsFolder.CreateFileAsync(fileName, CreationCollisionOption.OpenIfExists);
+
+            var properties = await file.GetBasicPropertiesAsync();
+            if (properties.Size == 0)
+            {
+                await RasterizeAsync(icon, file);
+            }
+
+            return new Uri(file.Path);
+        }
+        catch (Exception)
+        {
+            // Best-effort only: a glyph the font can't render, a locked-down
+            // LocalFolder, etc. should never block the toast itself — it
+            // just falls back to no logo image (the icon is still visible in
+            // the toast's text line above).
+            return null;
+        }
+    }
+
+    static async Task RasterizeAsync(string icon, StorageFile file)
+    {
+        const int size = 128;
+
+        var border = new Border
+        {
+            Width = size,
+            Height = size,
+            Background = new SolidColorBrush(Windows.UI.Color.FromArgb(255, 255, 255, 255)),
+            Child = new TextBlock
+            {
+                Text = icon,
+                FontSize = size * 0.7,
+                HorizontalAlignment = HorizontalAlignment.Center,
+                VerticalAlignment = VerticalAlignment.Center,
+            },
+        };
+        border.Measure(new Windows.Foundation.Size(size, size));
+        border.Arrange(new Windows.Foundation.Rect(0, 0, size, size));
+
+        var bitmap = new RenderTargetBitmap();
+        await bitmap.RenderAsync(border, size, size);
+        var pixels = await bitmap.GetPixelsAsync();
+
+        using var stream = await file.OpenAsync(FileAccessMode.ReadWrite);
+        var encoder = await BitmapEncoder.CreateAsync(BitmapEncoder.PngEncoderId, stream);
+        encoder.SetPixelData(
+            BitmapPixelFormat.Bgra8,
+            BitmapAlphaMode.Premultiplied,
+            (uint)bitmap.PixelWidth,
+            (uint)bitmap.PixelHeight,
+            96,
+            96,
+            System.Runtime.InteropServices.WindowsRuntime.WindowsRuntimeBufferExtensions.ToArray(pixels));
+        await encoder.FlushAsync();
+    }
+
+    static string CodepointFileName(string icon)
+    {
+        var sb = new StringBuilder();
+        foreach (var rune in icon.EnumerateRunes())
+        {
+            if (sb.Length > 0) sb.Append('-');
+            sb.Append(rune.Value.ToString("x"));
+        }
+        sb.Append(".png");
+        return sb.ToString();
     }
 
     /// <summary>Handles an activation this process observed itself via

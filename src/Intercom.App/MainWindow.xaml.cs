@@ -473,7 +473,7 @@ public sealed partial class MainWindow : Window, IResidentWindow
             // OnIncomingChatMessage uses for the chat chime.
             if (DndPolicy.IsSuppressed(dndEnabled, InteractionKind.AttentionChime)) return;
 
-            _attentionCardToastPresenter?.Show(card, fromLabel: "the demo peer");
+            _ = _attentionCardToastPresenter?.ShowAsync(card, fromLabel: "the demo peer");
         });
     }
 
