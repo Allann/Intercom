@@ -20,9 +20,19 @@ public sealed class TrayMessagePump : ITrayMessagePump
     const uint NIN_KEYSELECT = 0x0401;
     const uint WM_NULL = 0x0000;
 
+    const uint TPM_LEFTALIGN = 0x0000;
+    const uint TPM_RIGHTALIGN = 0x0008;
+    const uint TPM_BOTTOMALIGN = 0x0020;
+    const uint TPM_TOPALIGN = 0x0000;
     const uint TPM_RIGHTBUTTON = 0x0002;
     const uint TPM_RETURNCMD = 0x0100;
     const uint MF_STRING = 0x0000;
+
+    const uint ABM_GETTASKBARPOS = 0x00000005;
+    const int ABE_LEFT = 0;
+    const int ABE_TOP = 1;
+    const int ABE_RIGHT = 2;
+    const int ABE_BOTTOM = 3;
 
     const int MenuIdOpen = 1;
     const int MenuIdQuit = 2;
@@ -72,7 +82,8 @@ public sealed class TrayMessagePump : ITrayMessagePump
         // Required so the menu dismisses correctly if the user clicks away.
         SetForegroundWindow(_hwnd);
 
-        var selected = TrackPopupMenuEx(menu, TPM_RIGHTBUTTON | TPM_RETURNCMD, pt.x, pt.y, _hwnd, 0);
+        var align = GetPopupAlignmentForTaskbarEdge();
+        var selected = TrackPopupMenuEx(menu, align | TPM_RIGHTBUTTON | TPM_RETURNCMD, pt.x, pt.y, _hwnd, 0);
         DestroyMenu(menu);
 
         // Per the Shell_NotifyIcon guidance in docs/research/windows-resident-app.md:
@@ -83,6 +94,47 @@ public sealed class TrayMessagePump : ITrayMessagePump
         if (selected == MenuIdOpen) OpenRequested?.Invoke();
         else if (selected == MenuIdQuit) QuitRequested?.Invoke();
     }
+
+    // TrackPopupMenuEx defaults to TPM_LEFTALIGN | TPM_TOPALIGN, which grows the
+    // menu down and right from the cursor. That's fine near the top of the
+    // screen, but the tray icon sits inside the taskbar, so with the (by far
+    // most common) bottom taskbar the menu would grow off the bottom edge
+    // instead of opening upward like every native tray menu does. Ask the
+    // shell which edge the taskbar occupies and align away from it.
+    static uint GetPopupAlignmentForTaskbarEdge()
+    {
+        var data = new APPBARDATA { cbSize = (uint)Marshal.SizeOf<APPBARDATA>() };
+        if (SHAppBarMessage(ABM_GETTASKBARPOS, ref data) == 0)
+        {
+            return TPM_LEFTALIGN | TPM_BOTTOMALIGN; // fall back to the common case
+        }
+
+        return data.uEdge switch
+        {
+            ABE_BOTTOM => TPM_LEFTALIGN | TPM_BOTTOMALIGN,
+            ABE_TOP => TPM_LEFTALIGN | TPM_TOPALIGN,
+            ABE_LEFT => TPM_LEFTALIGN | TPM_TOPALIGN,
+            ABE_RIGHT => TPM_RIGHTALIGN | TPM_TOPALIGN,
+            _ => TPM_LEFTALIGN | TPM_BOTTOMALIGN,
+        };
+    }
+
+    [StructLayout(LayoutKind.Sequential)]
+    struct RECT { public int left, top, right, bottom; }
+
+    [StructLayout(LayoutKind.Sequential)]
+    struct APPBARDATA
+    {
+        public uint cbSize;
+        public nint hWnd;
+        public uint uCallbackMessage;
+        public uint uEdge;
+        public RECT rc;
+        public nint lParam;
+    }
+
+    [DllImport("shell32.dll")]
+    static extern nint SHAppBarMessage(uint dwMessage, ref APPBARDATA pData);
 
     public void Dispose()
     {

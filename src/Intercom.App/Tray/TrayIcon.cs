@@ -1,5 +1,6 @@
 using System.Runtime.InteropServices;
 using Intercom.Lifecycle;
+using System.IO;
 
 namespace Intercom.App.Tray;
 
@@ -86,9 +87,9 @@ public sealed class TrayIcon : ITrayIcon
 
     static IntPtr LoadIconForApp()
     {
-        // Placeholder: load the app's own executable icon. A dedicated .ico asset
-        // (comic-intercom mid-century style, per issue #8) replaces this later.
-        return LoadIconW(IntPtr.Zero, new IntPtr(32512)); // IDI_APPLICATION
+        var iconPath = Path.Combine(AppContext.BaseDirectory, "Assets", "TrayIcon.ico");
+        var hIcon = LoadImageW(IntPtr.Zero, iconPath, IMAGE_ICON, 0, 0, LR_LOADFROMFILE | LR_DEFAULTSIZE);
+        return hIcon != IntPtr.Zero ? hIcon : LoadIconW(IntPtr.Zero, new IntPtr(32512)); // IDI_APPLICATION fallback
     }
 
     public void Dispose() => Remove();
@@ -121,4 +122,11 @@ public sealed class TrayIcon : ITrayIcon
 
     [DllImport("user32.dll")]
     static extern IntPtr LoadIconW(IntPtr hInstance, IntPtr lpIconName);
+
+    const uint IMAGE_ICON = 1;
+    const uint LR_LOADFROMFILE = 0x00000010;
+    const uint LR_DEFAULTSIZE = 0x00000040;
+
+    [DllImport("user32.dll", CharSet = CharSet.Unicode, SetLastError = true)]
+    static extern IntPtr LoadImageW(IntPtr hinst, string name, uint type, int cx, int cy, uint fuLoad);
 }
