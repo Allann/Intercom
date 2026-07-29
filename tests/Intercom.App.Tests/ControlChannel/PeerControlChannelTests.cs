@@ -575,6 +575,7 @@ public class PeerControlChannelTests
 
     sealed class FakeTransportConnection : IPeerTransportConnection
     {
+        public IPAddress RemoteAddress => IPAddress.Loopback;
         readonly Channel<ControlFrame?> _inbound = System.Threading.Channels.Channel.CreateUnbounded<ControlFrame?>();
 
         public FakeTransportConnection(X509Certificate2 remoteCertificate)

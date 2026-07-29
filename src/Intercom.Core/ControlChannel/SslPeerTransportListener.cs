@@ -91,7 +91,9 @@ public sealed class SslPeerTransportListener : IPeerTransportListener
             };
             await sslStream.AuthenticateAsServerAsync(options, cancellationToken).ConfigureAwait(false);
 
-            ConnectionAccepted?.Invoke(new SslPeerConnection(sslStream));
+            var remoteAddress = ((IPEndPoint?)client.Client.RemoteEndPoint)?.Address
+                ?? throw new InvalidOperationException("Accepted TLS connection has no remote IP address.");
+            ConnectionAccepted?.Invoke(new SslPeerConnection(sslStream, remoteAddress));
         }
         catch (Exception ex)
         {

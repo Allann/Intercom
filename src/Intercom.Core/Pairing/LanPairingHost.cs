@@ -4,6 +4,7 @@ using Intercom.Diagnostics;
 using Intercom.Identity;
 using Intercom.Chat;
 using Intercom.AttentionCards;
+using Intercom.Audio;
 
 namespace Intercom.Pairing;
 
@@ -36,6 +37,11 @@ public sealed class LanPairingHost : IAsyncDisposable
     public IReadOnlyList<Guid> ConnectedPeerIds
     {
         get { lock (_gate) { return _connections.Keys.ToList(); } }
+    }
+
+    public IPAddress? ConnectedPeerAddress(Guid peerId)
+    {
+        lock (_gate) return _connections.TryGetValue(peerId, out var transport) ? transport.RemoteAddress : null;
     }
 
     public LanPairingHost(IdentityStore identityStore, int listenPort, Func<SpkiPin, Guid?> resolvePeerId)
@@ -91,6 +97,7 @@ public sealed class LanPairingHost : IAsyncDisposable
                 throw new InvalidOperationException("The approved peer presented a different identity certificate.");
             }
             EstablishApprovedConnection(peer.PeerId, connection);
+            _identityStore.UpdateLastKnownEndpoint(peer.PeerId, endpoint.Address, endpoint.Port);
         }
         catch (Exception ex)
         {
@@ -286,6 +293,7 @@ public sealed class LanPairingHost : IAsyncDisposable
 
     public IChatTransport CreateChatTransport(Guid peerId) => new LanPeerChatTransport(this, peerId);
     public IAttentionCardTransport CreateAttentionCardTransport(Guid peerId) => new LanPeerAttentionCardTransport(this, peerId);
+    public IAudioControlTransport CreateAudioControlTransport(Guid peerId) => new LanPeerAudioControlTransport(this, peerId);
 
     public Task ConfirmAsync(Guid remotePeerId, string friendlyName, CancellationToken cancellationToken)
     {
@@ -340,6 +348,7 @@ public sealed class LanPairingHost : IAsyncDisposable
         readonly CancellationTokenSource _cts = new();
         public event Action<ControlFrame>? FrameReceived;
         public event Action? Dropped;
+        public IPAddress RemoteAddress => connection.RemoteAddress;
 
         public void Start()
         {
@@ -424,4 +433,31 @@ sealed class LanPeerAttentionCardTransport : IAttentionCardTransport
     void OnDelivered(Guid peerId, Guid id) { if (peerId == _peerId) DeliveryConfirmed?.Invoke(id); }
     void OnDropped(Guid peerId) { if (peerId == _peerId) ConnectionDropped?.Invoke(); }
     public Task SendAsync(ControlFrame frame, CancellationToken cancellationToken) => _host.SendAsync(_peerId, frame, cancellationToken);
+}
+
+sealed class LanPeerAudioControlTransport : IAudioControlTransport
+{
+    readonly LanPairingHost _host;
+    readonly Guid _peerId;
+    public event Action<ControlFrame>? FrameReceived;
+    public event Action? ConnectionDropped;
+
+    public LanPeerAudioControlTransport(LanPairingHost host, Guid peerId)
+    {
+        _host = host;
+        _peerId = peerId;
+        host.ApplicationFrameReceived += OnFrame;
+        host.ConnectionDropped += OnDropped;
+    }
+
+    void OnFrame(Guid peerId, ControlFrame frame)
+    {
+        if (peerId == _peerId && frame.Type is ControlMessageType.AudioSessionOffer
+            or ControlMessageType.AudioSessionAccepted or ControlMessageType.AudioSessionStopped)
+            FrameReceived?.Invoke(frame);
+    }
+
+    void OnDropped(Guid peerId) { if (peerId == _peerId) ConnectionDropped?.Invoke(); }
+    public Task SendAsync(ControlFrame frame, CancellationToken cancellationToken) =>
+        _host.SendAsync(_peerId, frame, cancellationToken);
 }

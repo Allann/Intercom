@@ -1,3 +1,4 @@
 artifacts/
+.codex-build/
 **/bin/
 **/obj/

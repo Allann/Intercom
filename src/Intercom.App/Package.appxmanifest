@@ -11,7 +11,7 @@
   <Identity
     Name="Allann.Intercom"
     Publisher="CN=Intercom Development"
-    Version="1.0.0.11" />
+    Version="1.0.0.32" />
 
   <Properties>
     <DisplayName>Intercom</DisplayName>
@@ -48,6 +48,18 @@
           IPProtocol="TCP"
           LocalPortMin="47811"
           LocalPortMax="47811"
+          Profile="domainAndPrivate" />
+        <desktop2:Rule
+          Direction="in"
+          IPProtocol="UDP"
+          LocalPortMin="47810"
+          LocalPortMax="47810"
+          Profile="domainAndPrivate" />
+        <desktop2:Rule
+          Direction="in"
+          IPProtocol="UDP"
+          LocalPortMin="47812"
+          LocalPortMax="47812"
           Profile="domainAndPrivate" />
       </desktop2:FirewallRules>
     </desktop2:Extension>

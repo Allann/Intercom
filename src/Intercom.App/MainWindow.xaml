@@ -44,6 +44,7 @@
                                 <Border Grid.Column="0" Style="{StaticResource PanelStyle}" Background="#FFF4E8CE" VerticalAlignment="Stretch">
                                     <StackPanel Spacing="8">
                                         <TextBlock Text="FAMILY" Style="{StaticResource SectionHeaderStyle}"/>
+                                        <TextBlock x:Name="SelectedFamilyText" Text="Select who you want to reach" FontSize="10" Opacity="0.72" TextWrapping="Wrap"/>
                                         <TextBlock x:Name="NoDiscoveredPeersNotice" Text="No family members yet." FontSize="11" Opacity="0.7"/>
                                         <StackPanel x:Name="DiscoveredPeersList" Spacing="8" MaxHeight="420"/>
                                         <Button Content="+ Add Family Member" Style="{StaticResource SmallComicButtonStyle}" Background="#FF2F6F6B" Foreground="#FFFBF4E4" HorizontalAlignment="Stretch" Click="OnAddFamilyMemberClick"/>
@@ -71,19 +72,24 @@
                                         <StackPanel Spacing="10">
                                             <TextBlock Text="HANDS-FREE" Style="{StaticResource SectionHeaderStyle}"/>
                                             <StackPanel Orientation="Horizontal" Spacing="8">
-                                                <ComboBox x:Name="HandsFreeRecipientCombo" Width="210" PlaceholderText="Choose a family member" SelectionChanged="OnHandsFreeRecipientChanged"/>
-                                                <Button x:Name="HandsFreeButton" Content="Start Hands-Free" Style="{StaticResource SmallComicButtonStyle}" Background="#FF5C8A52" Foreground="#FFFBF4E4" Click="OnHandsFreeClick"/>
+                                                <ComboBox x:Name="HandsFreeRecipientCombo" Visibility="Collapsed" Width="210" PlaceholderText="Choose a family member" SelectionChanged="OnHandsFreeRecipientChanged"/>
+                                                <Button x:Name="HandsFreeButton" Content="Hands-Free later" IsEnabled="False" Style="{StaticResource SmallComicButtonStyle}" Background="#FF5C8A52" Foreground="#FFFBF4E4" Click="OnHandsFreeClick"/>
                                             </StackPanel>
-                                            <TextBlock x:Name="HandsFreeStatusText" Text="No hands-free session" FontSize="11" Opacity="0.7"/>
+                                            <TextBlock x:Name="HandsFreeStatusText" Text="Select an online family member from the Family list." FontSize="11" Opacity="0.7"/>
                                         </StackPanel>
                                     </Border>
 
                                     <Border Style="{StaticResource PanelStyle}">
                                         <Grid ColumnSpacing="14">
                                             <Grid.ColumnDefinitions><ColumnDefinition Width="Auto"/><ColumnDefinition Width="*"/></Grid.ColumnDefinitions>
-                                            <Button x:Name="PushToTalkButton" Grid.Column="0" Width="90" Height="90" CornerRadius="45" Style="{StaticResource ComicButtonStyle}" Background="#FFB6502F" Foreground="#FFFBF4E4" IsEnabled="False" PointerPressed="OnPushToTalkPressed" PointerReleased="OnPushToTalkReleased"><TextBlock Text="Hold to&#x0a;Talk" TextAlignment="Center"/></Button>
+                                            <Button x:Name="PushToTalkButton" Grid.Column="0" Width="90" Height="90" CornerRadius="45" Style="{StaticResource ComicButtonStyle}" Background="#FFB6502F" Foreground="#FFFBF4E4" IsEnabled="False" PointerReleased="OnPushToTalkReleased" PointerCanceled="OnPushToTalkReleased" PointerCaptureLost="OnPushToTalkReleased"><TextBlock Text="Hold to&#x0a;Talk" TextAlignment="Center"/></Button>
                                             <StackPanel Grid.Column="1" Spacing="8" VerticalAlignment="Center">
                                                 <TextBlock x:Name="PushToTalkHint" Text="Enabled when you hold the group floor or a hands-free session." FontSize="11" Opacity="0.75" TextWrapping="Wrap"/>
+                                                <Button x:Name="TestSpeakerButton" Content="Test selected speaker" IsEnabled="False" HorizontalAlignment="Left" Click="OnTestSpeakerClick"/>
+                                                <TextBlock Text="Audio devices" FontSize="10" FontWeight="Bold"/>
+                                                <ComboBox x:Name="AudioInputCombo" Header="Microphone" PlaceholderText="Windows communications default" SelectionChanged="OnAudioDeviceSelectionChanged"/>
+                                                <ComboBox x:Name="AudioOutputCombo" Header="Speaker" PlaceholderText="Windows communications default" SelectionChanged="OnAudioDeviceSelectionChanged"/>
+                                                <TextBlock x:Name="AudioDiagnosticsText" Text="Audio session not initialized." FontSize="10" Opacity="0.72" TextWrapping="Wrap"/>
                                                 <Button x:Name="DndSignButton" Content="Available" Style="{StaticResource SmallComicButtonStyle}" HorizontalAlignment="Left" Click="OnToggleDndClick"/>
                                                 <StackPanel Orientation="Horizontal" Spacing="8">
                                                     <TextBlock Text="● available" FontSize="10" Foreground="#FF5C8A52"/><TextBlock Text="● talking" FontSize="10" Foreground="#FFE8A33D"/><TextBlock Text="● DND" FontSize="10" Foreground="#FFC1443A"/>
@@ -96,7 +102,7 @@
                                 <Border Grid.Column="2" Style="{StaticResource PanelStyle}" Background="#FFF4E8CE" VerticalAlignment="Stretch">
                                     <StackPanel Spacing="8">
                                         <TextBlock Text="CHAT" Style="{StaticResource SectionHeaderStyle}"/>
-                                        <ComboBox x:Name="ChatRecipientCombo" PlaceholderText="Choose a family member" SelectionChanged="OnChatRecipientChanged"/>
+                                        <ComboBox x:Name="ChatRecipientCombo" Visibility="Collapsed" PlaceholderText="Choose a family member" SelectionChanged="OnChatRecipientChanged"/>
                                         <CheckBox x:Name="SpokenChatCheckBox" Content="Read incoming messages aloud" Checked="OnSpokenChatToggled" Unchecked="OnSpokenChatToggled"/>
                                         <TextBlock x:Name="ChatChimeNotice" Text="🔔 New message" FontSize="11" FontWeight="Bold" Foreground="#FFB6502F" Visibility="Collapsed"/>
                                         <ScrollViewer x:Name="ChatScrollViewer" MinHeight="250" MaxHeight="420"><StackPanel x:Name="ChatMessagesPanel" Spacing="6"/></ScrollViewer>
@@ -122,7 +128,7 @@
                                         <TextBlock Text="SEND AN ATTENTION CARD" Style="{StaticResource SectionHeaderStyle}"/>
                                         <StackPanel Orientation="Horizontal" Spacing="10">
                                             <StackPanel Spacing="4" Width="200"><TextBlock Text="Purpose" FontSize="9" FontWeight="Bold"/><ComboBox x:Name="ComposerPresetCombo" Width="200" SelectionChanged="OnComposerPresetChanged"/><TextBox x:Name="ComposerCustomTextBox" Width="200" PlaceholderText="Short purpose" Visibility="Collapsed"/></StackPanel>
-                                            <StackPanel Spacing="4" Width="140"><TextBlock Text="Send to" FontSize="9" FontWeight="Bold"/><ComboBox x:Name="ComposerRecipientCombo" Width="140" PlaceholderText="Family member" SelectionChanged="OnAttentionRecipientChanged"/></StackPanel>
+                                            <ComboBox x:Name="ComposerRecipientCombo" Visibility="Collapsed" Width="140" PlaceholderText="Family member" SelectionChanged="OnAttentionRecipientChanged"/>
                                         </StackPanel>
                                         <TextBlock Text="Icon" FontSize="9" FontWeight="Bold"/><StackPanel x:Name="EmojiPickerPanel" Orientation="Horizontal" Spacing="4"/>
                                         <Button x:Name="SendAttentionCardButton" Content="Send" Style="{StaticResource SmallComicButtonStyle}" Background="#FF2F6F6B" Foreground="#FFFBF4E4" HorizontalAlignment="Right" Click="OnSendAttentionCardClick"/>

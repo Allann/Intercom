@@ -112,6 +112,12 @@ public enum ControlMessageType : ushort
     /// type, an inbound Resolved frame still gets its own mechanical
     /// Delivered receipt in turn (ADR-0001).</summary>
     Resolved = 11,
+
+    /// <summary>Issue #26: negotiates a unicast UDP voice stream and carries
+    /// its fresh AES-GCM key/nonce prefix inside the authenticated TLS channel.</summary>
+    AudioSessionOffer = 12,
+    AudioSessionAccepted = 13,
+    AudioSessionStopped = 14,
 }
 
 /// <summary>

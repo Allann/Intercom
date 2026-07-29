@@ -1,4 +1,5 @@
 using System.Security.Cryptography.X509Certificates;
+using System.Net;
 
 namespace Intercom.ControlChannel;
 
@@ -13,6 +14,7 @@ namespace Intercom.ControlChannel;
 /// </summary>
 public interface IPeerTransportConnection : IAsyncDisposable
 {
+    IPAddress RemoteAddress { get; }
     /// <summary>The certificate the remote side authenticated with during
     /// the TLS handshake. Always present — mutual TLS with a required client
     /// certificate means a connection that reaches this interface always has

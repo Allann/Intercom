@@ -8,6 +8,7 @@ using Microsoft.UI.Windowing;
 using Windows.UI;
 using WinRT.Interop;
 using Intercom.AttentionCards;
+using Intercom.Audio;
 using Intercom.Chat;
 using Intercom.Contacts;
 using Intercom.Diagnostics;
@@ -19,6 +20,7 @@ using Intercom.Pairing;
 using Intercom.Routing;
 using Intercom.Updates;
 using Intercom.App.AttentionCards;
+using Intercom.App.Audio;
 using Intercom.App.Chat;
 
 namespace Intercom.App;
@@ -49,6 +51,10 @@ public sealed partial class MainWindow : Window, IResidentWindow
 
     readonly DispatcherQueue _dispatcherQueue;
     readonly DispatcherQueueTimer _chatChimeHideTimer;
+    readonly DispatcherQueueTimer _audioDiagnosticsTimer;
+    readonly AudioDeviceSettingsStore _audioDeviceSettingsStore = new();
+    AudioDeviceSettings _audioDeviceSettings = new(null, null);
+    bool _loadingAudioDevices;
 
     IdentityStore? _identityStore;
     DndSettingsStore? _dndSettings;
@@ -62,6 +68,8 @@ public sealed partial class MainWindow : Window, IResidentWindow
     readonly Dictionary<Guid, ChatService> _chatServices = [];
     readonly Dictionary<Guid, IAttentionCardTransport> _attentionCardTransports = [];
     readonly Dictionary<Guid, AttentionCardFanoutRouter> _attentionCardRouters = [];
+    readonly Dictionary<Guid, AudioSessionNegotiator> _audioNegotiators = [];
+    readonly Dictionary<Guid, AudioPipelineSession> _audioSessions = [];
 
     // ---- Issue #25: attention cards ----
     const string CustomComposerPresetLabel = "Custom…";
@@ -73,6 +81,7 @@ public sealed partial class MainWindow : Window, IResidentWindow
     PresenceReceiver? _presenceReceiver;
     Guid? _selectedChatPeerId;
     Guid? _selectedAttentionPeerId;
+    readonly HashSet<Guid> _selectedFamilyPeerIds = [];
     AttentionCardToastPresenter? _attentionCardToastPresenter;
     string _selectedComposerIcon = AttentionCardPresets.Presets[0].Icon;
 
@@ -92,10 +101,15 @@ public sealed partial class MainWindow : Window, IResidentWindow
     bool _hasGroupFloor;
     bool _handRaised;
     bool _handsFreeActive;
+    bool _pushToTalkHeld;
 
     public MainWindow()
     {
         InitializeComponent();
+        PushToTalkButton.AddHandler(
+            UIElement.PointerPressedEvent,
+            new Microsoft.UI.Xaml.Input.PointerEventHandler(OnPushToTalkPressed),
+            handledEventsToo: true);
         Title = "Intercom";
 
         Hwnd = WindowNative.GetWindowHandle(this);
@@ -110,6 +124,9 @@ public sealed partial class MainWindow : Window, IResidentWindow
             _chatChimeHideTimer.Stop();
             ChatChimeNotice.Visibility = Visibility.Collapsed;
         };
+        _audioDiagnosticsTimer = _dispatcherQueue.CreateTimer();
+        _audioDiagnosticsTimer.Interval = TimeSpan.FromSeconds(1);
+        _audioDiagnosticsTimer.Tick += (_, _) => RenderAudioDiagnostics();
 
         // ADR-0003: closing the main window hides it to the tray; only an
         // explicit tray "Quit" action actually ends the process.
@@ -117,6 +134,52 @@ public sealed partial class MainWindow : Window, IResidentWindow
 
         InitializeChatDrawer();
         InitializeAttentionCardShelf();
+        _ = LoadAudioDevicesAsync();
+    }
+
+    async Task LoadAudioDevicesAsync()
+    {
+        try
+        {
+            _audioDeviceSettings = _audioDeviceSettingsStore.Load();
+            var devices = await AudioGraphDevice.GetDevicesAsync();
+            var inputs = new List<AudioDeviceChoice> { new(null, "Windows communications default"), new("", "No microphone (listen only)") };
+            inputs.AddRange(devices.Inputs);
+            var outputs = new List<AudioDeviceChoice> { new(null, "Windows communications default") };
+            outputs.AddRange(devices.Outputs);
+            _loadingAudioDevices = true;
+            AudioInputCombo.ItemsSource = inputs;
+            AudioOutputCombo.ItemsSource = outputs;
+            AudioInputCombo.SelectedItem = inputs.FirstOrDefault(item => item.Id == _audioDeviceSettings.InputDeviceId) ?? inputs[0];
+            AudioOutputCombo.SelectedItem = outputs.FirstOrDefault(item => item.Id == _audioDeviceSettings.OutputDeviceId) ?? outputs[0];
+            _loadingAudioDevices = false;
+            RenderSelectedAudioDevices();
+        }
+        catch (Exception ex)
+        {
+            AudioDiagnosticsText.Text = "Could not read the Windows communications audio devices.";
+            DiagnosticLog.Current.Error("audio.devices-failed", "Could not resolve communications audio devices.", ex);
+        }
+    }
+
+    async void OnAudioDeviceSelectionChanged(object sender, SelectionChangedEventArgs e)
+    {
+        if (_loadingAudioDevices || AudioInputCombo.SelectedItem is not AudioDeviceChoice input
+            || AudioOutputCombo.SelectedItem is not AudioDeviceChoice output) return;
+        _audioDeviceSettings = new(input.Id, output.Id);
+        _audioDeviceSettingsStore.Save(_audioDeviceSettings);
+        await StopAudioAsync();
+        RefreshMessagingPeers();
+        RenderSelectedAudioDevices();
+        PushToTalkHint.Text = "Audio device changed. Hold the button to reconnect voice.";
+        DiagnosticLog.Current.Info("audio.devices-selected", $"mic={input.Name} speaker={output.Name}");
+    }
+
+    void RenderSelectedAudioDevices()
+    {
+        var input = (AudioInputCombo.SelectedItem as AudioDeviceChoice)?.Name ?? "Loading…";
+        var output = (AudioOutputCombo.SelectedItem as AudioDeviceChoice)?.Name ?? "Loading…";
+        AudioDiagnosticsText.Text = $"Mic: {input}\nSpeaker: {output}\nVoice session: not initialized.";
     }
 
     void OnAppWindowClosing(AppWindow sender, AppWindowClosingEventArgs args)
@@ -188,13 +251,17 @@ public sealed partial class MainWindow : Window, IResidentWindow
         foreach (var approved in approvedPeers)
         {
             var online = _peerHost?.ConnectedPeerIds.Contains(approved.PeerId) == true;
-            DiscoveredPeersList.Children.Add(new Button
+            var member = new Microsoft.UI.Xaml.Controls.Primitives.ToggleButton
             {
                 Content = $"✓ {approved.FriendlyName} · {(online ? "online" : "offline")}",
                 HorizontalAlignment = HorizontalAlignment.Stretch,
                 HorizontalContentAlignment = HorizontalAlignment.Center,
-                IsEnabled = false,
-            });
+                IsEnabled = online,
+                IsChecked = _selectedFamilyPeerIds.Contains(approved.PeerId),
+                Tag = approved.PeerId,
+            };
+            member.Click += OnFamilyMemberClick;
+            DiscoveredPeersList.Children.Add(member);
         }
         foreach (var peer in pairablePeers)
         {
@@ -290,23 +357,68 @@ public sealed partial class MainWindow : Window, IResidentWindow
 
     void OnHandsFreeRecipientChanged(object sender, SelectionChangedEventArgs e) => UpdateMessagingEnabled();
 
-    void OnPushToTalkPressed(object sender, Microsoft.UI.Xaml.Input.PointerRoutedEventArgs e)
+    async void OnPushToTalkPressed(object sender, Microsoft.UI.Xaml.Input.PointerRoutedEventArgs e)
     {
+        if (HandsFreeRecipientCombo.SelectedItem is not PeerChoice choice)
+        {
+            DiagnosticLog.Current.Warning("audio.ptt-ignored", $"reason=no-selected-peer selectedFamilyCount={_selectedFamilyPeerIds.Count}");
+            PushToTalkHint.Text = "Select one online family member first.";
+            return;
+        }
+        DiagnosticLog.Current.Info("audio.ptt-pressed", $"peer={choice.PeerId}");
+        PushToTalkButton.CapturePointer(e.Pointer);
+        _pushToTalkHeld = true;
         PushToTalkButton.Content = "On Air";
         PushToTalkButton.Background = Mustard;
-        PushToTalkHint.Text = "Transmitting while held.";
+        if (_audioSessions.TryGetValue(choice.PeerId, out var session)
+            && session.State.State is AudioSessionState.Running or AudioSessionState.Degraded)
+        {
+            session.StartTransmitting();
+            PushToTalkHint.Text = "Transmitting while held.";
+            return;
+        }
+
+        if (!_audioNegotiators.TryGetValue(choice.PeerId, out var negotiator))
+        {
+            DiagnosticLog.Current.Warning("audio.ptt-ignored", $"peer={choice.PeerId} reason=no-negotiator");
+            PushToTalkHint.Text = "Voice endpoint is not available yet.";
+            return;
+        }
+
+        PushToTalkHint.Text = "Connecting voice… keep holding to talk.";
+        try
+        {
+            await negotiator.OfferAsync(CancellationToken.None);
+        }
+        catch (Exception ex)
+        {
+            DiagnosticLog.Current.Error("audio.offer-failed", $"peer={choice.PeerId}", ex);
+            PushToTalkHint.Text = "Couldn’t start voice. Text is still available.";
+            _pushToTalkHeld = false;
+        }
     }
 
-    void OnPushToTalkReleased(object sender, Microsoft.UI.Xaml.Input.PointerRoutedEventArgs e) => RenderVoiceControls();
+    void OnPushToTalkReleased(object sender, Microsoft.UI.Xaml.Input.PointerRoutedEventArgs e)
+    {
+        DiagnosticLog.Current.Info("audio.ptt-released", $"selectedPeer={(HandsFreeRecipientCombo.SelectedItem as PeerChoice)?.PeerId}");
+        _pushToTalkHeld = false;
+        PushToTalkButton.ReleasePointerCaptures();
+        if (HandsFreeRecipientCombo.SelectedItem is PeerChoice choice
+            && _audioSessions.TryGetValue(choice.PeerId, out var session))
+            session.StopTransmitting();
+        RenderVoiceControls();
+    }
 
     void RenderVoiceControls()
     {
-        PushToTalkButton.IsEnabled = _hasGroupFloor || _handsFreeActive;
+        var connectedPeer = HandsFreeRecipientCombo.SelectedItem is PeerChoice choice
+            && _peerHost?.ConnectedPeerIds.Contains(choice.PeerId) == true;
+        PushToTalkButton.IsEnabled = connectedPeer;
         PushToTalkButton.Content = new TextBlock { Text = "Hold to\nTalk", TextAlignment = TextAlignment.Center };
-        PushToTalkButton.Background = _hasGroupFloor || _handsFreeActive ? DndRed : new SolidColorBrush(Color.FromArgb(255, 0xCB, 0xBF, 0xA4));
+        PushToTalkButton.Background = connectedPeer ? DndRed : new SolidColorBrush(Color.FromArgb(255, 0xCB, 0xBF, 0xA4));
         PushToTalkHint.Text = PushToTalkButton.IsEnabled
             ? "Hold the button while you speak."
-            : "Enabled when you hold the group floor or a hands-free session.";
+            : "Choose an online family member to talk.";
     }
 
     public async void ShowPairingCode(
@@ -379,13 +491,62 @@ public sealed partial class MainWindow : Window, IResidentWindow
     /// after AppLifecycle.Start has loaded the store — not passed through
     /// the constructor, since <see cref="Intercom.Lifecycle.AppLifecycle"/>'s
     /// window factory is a parameterless <c>Func&lt;IResidentWindow&gt;</c>.</summary>
-    public void AttachIdentityStore(IdentityStore identityStore) => _identityStore = identityStore;
+    public void AttachIdentityStore(IdentityStore identityStore)
+    {
+        _identityStore = identityStore;
+        UpdateDiscoveredPeers(_lastDiscoveredPeers);
+    }
 
     public void AttachPeerHost(LanPairingHost peerHost)
     {
         _peerHost = peerHost;
         peerHost.ConnectionsChanged += () => _dispatcherQueue.TryEnqueue(() => UpdateDiscoveredPeers(_lastDiscoveredPeers));
         RefreshMessagingPeers();
+    }
+
+    void OnFamilyMemberClick(object sender, RoutedEventArgs e)
+    {
+        if (sender is not Microsoft.UI.Xaml.Controls.Primitives.ToggleButton { Tag: Guid peerId } member) return;
+        if (member.IsChecked == true) _selectedFamilyPeerIds.Add(peerId);
+        else _selectedFamilyPeerIds.Remove(peerId);
+        ApplyFamilySelection();
+    }
+
+    void ApplyFamilySelection()
+    {
+        if (_identityStore is null) return;
+        var selected = _identityStore.ApprovedPeers
+            .Where(peer => !peer.Revoked && _selectedFamilyPeerIds.Contains(peer.PeerId))
+            .ToList();
+        var primary = selected.FirstOrDefault(peer => _peerHost?.ConnectedPeerIds.Contains(peer.PeerId) == true);
+        _selectedChatPeerId = primary?.PeerId;
+        _selectedAttentionPeerId = primary?.PeerId;
+        _refreshingPeerChoices = true;
+        SelectPeerChoice(ChatRecipientCombo, primary?.PeerId);
+        SelectPeerChoice(ComposerRecipientCombo, primary?.PeerId);
+        SelectPeerChoice(HandsFreeRecipientCombo, primary?.PeerId);
+        _refreshingPeerChoices = false;
+        SelectedFamilyText.Text = selected.Count switch
+        {
+            0 => "Select who you want to reach",
+            1 => $"Selected: {selected[0].FriendlyName}",
+            _ => $"Group selected: {string.Join(", ", selected.Select(peer => peer.FriendlyName))}",
+        };
+        HandsFreeStatusText.Text = selected.Count == 0
+            ? "Select an online family member from the Family list."
+            : selected.Count == 1 ? $"Push-to-talk with {selected[0].FriendlyName}." : $"Group push-to-talk · {selected.Count} members.";
+        UpdateMessagingEnabled();
+        RenderChatSpokenToggle();
+        RenderChatMessages();
+        RenderAttentionCardShelf();
+        RenderVoiceControls();
+        RenderAudioDiagnostics();
+    }
+
+    static void SelectPeerChoice(ComboBox combo, Guid? peerId)
+    {
+        var choices = combo.ItemsSource as IEnumerable<PeerChoice>;
+        combo.SelectedItem = choices?.FirstOrDefault(choice => choice.PeerId == peerId);
     }
 
     /// <summary>Issue #23: gives this window access to the real
@@ -481,13 +642,127 @@ public sealed partial class MainWindow : Window, IResidentWindow
         HandsFreeRecipientCombo.ItemsSource = choices.ToList();
         ChatRecipientCombo.SelectedIndex = choices.FindIndex(choice => choice.PeerId == _selectedChatPeerId);
         ComposerRecipientCombo.SelectedIndex = choices.FindIndex(choice => choice.PeerId == _selectedAttentionPeerId);
-        if (ChatRecipientCombo.SelectedIndex < 0 && choices.Count > 0) ChatRecipientCombo.SelectedIndex = 0;
-        if (ComposerRecipientCombo.SelectedIndex < 0 && choices.Count > 0) ComposerRecipientCombo.SelectedIndex = 0;
-        if (HandsFreeRecipientCombo.SelectedIndex < 0 && choices.Count > 0) HandsFreeRecipientCombo.SelectedIndex = 0;
         _selectedChatPeerId = (ChatRecipientCombo.SelectedItem as PeerChoice)?.PeerId;
         _selectedAttentionPeerId = (ComposerRecipientCombo.SelectedItem as PeerChoice)?.PeerId;
         _refreshingPeerChoices = false;
         UpdateMessagingEnabled();
+        RefreshAudioPeers(peers);
+        ApplyFamilySelection();
+    }
+
+    void RefreshAudioPeers(IReadOnlyList<ApprovedPeer> peers)
+    {
+        if (_peerHost is null) return;
+        foreach (var peer in peers)
+        {
+            if (_audioNegotiators.ContainsKey(peer.PeerId)) continue;
+            var visible = _lastDiscoveredPeers.FirstOrDefault(candidate =>
+                Guid.TryParseExact(candidate.PeerIdHint.Value, "N", out var id) && id == peer.PeerId);
+            var endpoint = visible?.Endpoints
+                .OrderBy(item => item.Address.AddressFamily == System.Net.Sockets.AddressFamily.InterNetwork ? 0 : 1)
+                .FirstOrDefault();
+            var remoteAddress = endpoint?.Address ?? _peerHost.ConnectedPeerAddress(peer.PeerId);
+            if (remoteAddress is null) continue;
+
+            var negotiator = new AudioSessionNegotiator(
+                _peerHost.CreateAudioControlTransport(peer.PeerId),
+                remoteAddress,
+                () => new AudioGraphDevice(_audioDeviceSettings.InputDeviceId, _audioDeviceSettings.OutputDeviceId));
+            negotiator.IncomingOffer += (offer, messageId) =>
+                _ = AcceptIncomingAudioAsync(peer.PeerId, negotiator, offer, messageId);
+            negotiator.SessionReady += session => OnAudioSessionReady(peer.PeerId, session);
+            negotiator.NegotiationFailed += reason => _dispatcherQueue.TryEnqueue(() =>
+            {
+                PushToTalkHint.Text = reason;
+                AudioDiagnosticsText.Text += $"\nVoice negotiation failed: {reason}";
+            });
+            _audioNegotiators[peer.PeerId] = negotiator;
+            DiagnosticLog.Current.Info("audio.negotiator-created", $"peer={peer.PeerId} remote={remoteAddress} source={(endpoint is null ? "connection" : "discovery")}");
+        }
+    }
+
+    async Task AcceptIncomingAudioAsync(Guid peerId, AudioSessionNegotiator negotiator, AudioSessionOffer offer, Guid messageId)
+    {
+        try
+        {
+            await negotiator.AcceptAsync(offer, messageId, CancellationToken.None);
+        }
+        catch (Exception ex)
+        {
+            DiagnosticLog.Current.Error("audio.accept-failed", $"peer={peerId}", ex);
+        }
+    }
+
+    void OnAudioSessionReady(Guid peerId, AudioPipelineSession session) => _dispatcherQueue.TryEnqueue(async () =>
+    {
+        if (_audioSessions.Remove(peerId, out var previous)) await previous.DisposeAsync();
+        _audioSessions[peerId] = session;
+        session.State.StateChanged += (sender, state) => _dispatcherQueue.TryEnqueue(() =>
+        {
+            if (state == AudioSessionState.Failed)
+            {
+                PushToTalkHint.Text = "Audio device failed. Text is still available.";
+                _ = RetireFailedAudioSessionAsync(peerId, session);
+            }
+        });
+        try
+        {
+            await session.StartAsync();
+            _audioDiagnosticsTimer.Start();
+            if (_pushToTalkHeld && HandsFreeRecipientCombo.SelectedItem is PeerChoice choice && choice.PeerId == peerId)
+                session.StartTransmitting();
+            PushToTalkHint.Text = session.Transmitting ? "Transmitting while held." : "Voice ready. Hold the button while you speak.";
+        }
+        catch (Exception ex)
+        {
+            DiagnosticLog.Current.Error("audio.start-failed", $"peer={peerId}", ex);
+            PushToTalkHint.Text = "Microphone or speaker unavailable. Text is still available.";
+        }
+    });
+
+    async Task RetireFailedAudioSessionAsync(Guid peerId, AudioPipelineSession failed)
+    {
+        if (_audioSessions.TryGetValue(peerId, out var current) && ReferenceEquals(current, failed))
+            _audioSessions.Remove(peerId);
+        if (_audioNegotiators.TryGetValue(peerId, out var negotiator))
+            await negotiator.RetireAsync(failed);
+        else
+            await failed.DisposeAsync();
+        RenderAudioDiagnostics();
+    }
+
+    public async Task StopAudioAsync()
+    {
+        _audioDiagnosticsTimer.Stop();
+        foreach (var session in _audioSessions.Values.ToList()) await session.DisposeAsync();
+        _audioSessions.Clear();
+        foreach (var negotiator in _audioNegotiators.Values.ToList()) await negotiator.DisposeAsync();
+        _audioNegotiators.Clear();
+    }
+
+    void OnTestSpeakerClick(object sender, RoutedEventArgs e)
+    {
+        if (HandsFreeRecipientCombo.SelectedItem is PeerChoice choice
+            && _audioSessions.TryGetValue(choice.PeerId, out var session))
+            session.PlayTestTone();
+    }
+
+    void RenderAudioDiagnostics()
+    {
+        if (HandsFreeRecipientCombo.SelectedItem is not PeerChoice choice
+            || !_audioSessions.TryGetValue(choice.PeerId, out var session))
+        {
+            TestSpeakerButton.IsEnabled = false;
+            return;
+        }
+
+        var d = session.Diagnostics;
+        TestSpeakerButton.IsEnabled = session.State.State is AudioSessionState.Running or AudioSessionState.Degraded;
+        var levelPercent = Math.Clamp(d.CapturePeak * 100 / short.MaxValue, 0, 100);
+        AudioDiagnosticsText.Text =
+            $"Mic: {d.InputDeviceName}\nSpeaker: {d.OutputDeviceName}\n" +
+            $"Mic level: {levelPercent}% · captured: {d.CapturedSamples} samples · sent: {d.SentPackets}\n" +
+            $"received: {d.ReceivedPackets} · played: {d.PlayedFrames} · concealed: {d.ConcealedFrames}";
     }
 
     void UpdateMessagingEnabled()
@@ -495,8 +770,7 @@ public sealed partial class MainWindow : Window, IResidentWindow
         if (_peerHost is null) return;
         ChatSendButton.IsEnabled = _selectedChatPeerId is Guid chatPeer && _peerHost.ConnectedPeerIds.Contains(chatPeer);
         SendAttentionCardButton.IsEnabled = _selectedAttentionPeerId is Guid cardPeer && _peerHost.ConnectedPeerIds.Contains(cardPeer);
-        HandsFreeButton.IsEnabled = HandsFreeRecipientCombo.SelectedItem is PeerChoice handsFreePeer
-            && _peerHost.ConnectedPeerIds.Contains(handsFreePeer.PeerId);
+        HandsFreeButton.IsEnabled = false;
     }
 
     void OnChatRecipientChanged(object sender, SelectionChangedEventArgs e)
@@ -563,9 +837,25 @@ public sealed partial class MainWindow : Window, IResidentWindow
 
     async Task SendChatTextAsync(string text)
     {
-        if (_selectedChatPeerId is not Guid peerId || !_chatServices.TryGetValue(peerId, out var chatService) || string.IsNullOrWhiteSpace(text)) return;
+        if (string.IsNullOrWhiteSpace(text)) return;
+        var selectedOnline = _selectedFamilyPeerIds
+            .Where(id => _peerHost?.ConnectedPeerIds.Contains(id) == true && _chatServices.ContainsKey(id))
+            .ToList();
+        if (selectedOnline.Count == 0) return;
 
         ChatInputBox.Text = "";
+        if (selectedOnline.Count > 1)
+        {
+            foreach (var selectedPeerId in selectedOnline)
+            {
+                try { await _chatServices[selectedPeerId].SendAsync(text, CancellationToken.None); }
+                catch { }
+            }
+            return;
+        }
+
+        var peerId = selectedOnline[0];
+        var chatService = _chatServices[peerId];
         try
         {
             var contact = FindContactForPeer(peerId);
@@ -832,11 +1122,27 @@ public sealed partial class MainWindow : Window, IResidentWindow
 
     async Task SendAttentionCardAsync()
     {
-        if (_selectedAttentionPeerId is not Guid peerId || !_attentionCardServices.TryGetValue(peerId, out var cardService)) return;
-
         var isCustom = ComposerPresetCombo.SelectedItem as string == CustomComposerPresetLabel;
         var purpose = isCustom ? ComposerCustomTextBox.Text.Trim() : ComposerPresetCombo.SelectedItem as string ?? "";
         if (string.IsNullOrWhiteSpace(purpose)) return;
+
+        var selectedOnline = _selectedFamilyPeerIds
+            .Where(id => _peerHost?.ConnectedPeerIds.Contains(id) == true && _attentionCardServices.ContainsKey(id))
+            .ToList();
+        if (selectedOnline.Count == 0) return;
+        if (selectedOnline.Count > 1)
+        {
+            foreach (var selectedPeerId in selectedOnline)
+            {
+                try { await _attentionCardServices[selectedPeerId].SendAsync(purpose, _selectedComposerIcon, CancellationToken.None); }
+                catch { }
+            }
+            if (isCustom) ComposerCustomTextBox.Text = "";
+            return;
+        }
+
+        var peerId = selectedOnline[0];
+        var cardService = _attentionCardServices[peerId];
 
         try
         {

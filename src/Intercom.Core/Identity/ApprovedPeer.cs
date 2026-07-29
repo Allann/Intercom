@@ -26,6 +26,12 @@ public sealed record ApprovedPeer
     /// contact association on forget, not just the pin.</summary>
     public string? ContactId { get; set; }
 
+    /// <summary>Last endpoint at which this pinned identity successfully
+    /// connected. This is routing metadata, never identity evidence: every
+    /// reconnect still requires the stored SPKI pin to match.</summary>
+    public string? LastKnownAddress { get; set; }
+    public int? LastKnownPort { get; set; }
+
     /// <summary>
     /// Set by Forget. The record itself is kept (rather than deleted outright)
     /// so a forgotten peer remains visible for local audit/debugging, per

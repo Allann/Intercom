@@ -69,7 +69,7 @@ public sealed class SslPeerTransportConnector : IPeerTransportConnector
             // sslStream now owns the underlying NetworkStream/socket;
             // SslPeerConnection.DisposeAsync disposing it is what ultimately
             // closes the TCP connection.
-            return new SslPeerConnection(sslStream);
+            return new SslPeerConnection(sslStream, endpoint.Address);
         }
         catch
         {

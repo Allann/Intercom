@@ -1,5 +1,6 @@
 using System.Net.Security;
 using System.Security.Cryptography.X509Certificates;
+using System.Net;
 
 namespace Intercom.ControlChannel;
 
@@ -15,6 +16,7 @@ namespace Intercom.ControlChannel;
 public sealed class SslPeerConnection : IPeerTransportConnection
 {
     readonly SslStream _stream;
+    public IPAddress RemoteAddress { get; }
 
     // SslStream has no internal serialization for concurrent writers — a
     // heartbeat-timer tick and an app-triggered send racing each other must
@@ -26,9 +28,10 @@ public sealed class SslPeerConnection : IPeerTransportConnection
 
     bool _disposed;
 
-    public SslPeerConnection(SslStream stream)
+    public SslPeerConnection(SslStream stream, IPAddress remoteAddress)
     {
         _stream = stream;
+        RemoteAddress = remoteAddress;
     }
 
     public X509Certificate2 RemoteCertificate =>

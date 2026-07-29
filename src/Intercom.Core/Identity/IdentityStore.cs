@@ -2,6 +2,7 @@ using System.Security.Cryptography;
 using System.Security.Cryptography.X509Certificates;
 using System.Text;
 using System.Text.Json;
+using System.Net;
 
 namespace Intercom.Identity;
 
@@ -223,6 +224,23 @@ public sealed class IdentityStore
             var peer = _registry.Peers.FirstOrDefault(p => p.PeerId == peerId);
             if (peer is null) return false;
             peer.FriendlyName = friendlyName;
+            PersistRegistry(_registry.Peers);
+            return true;
+        }
+    }
+
+    public bool UpdateLastKnownEndpoint(Guid peerId, IPAddress address, int port)
+    {
+        ArgumentNullException.ThrowIfNull(address);
+        if (port is < 1 or > 65535) throw new ArgumentOutOfRangeException(nameof(port));
+        lock (_gate)
+        {
+            var peer = _registry.Peers.FirstOrDefault(p => p.PeerId == peerId && !p.Revoked);
+            if (peer is null) return false;
+            var value = address.ToString();
+            if (peer.LastKnownAddress == value && peer.LastKnownPort == port) return true;
+            peer.LastKnownAddress = value;
+            peer.LastKnownPort = port;
             PersistRegistry(_registry.Peers);
             return true;
         }

@@ -40,6 +40,7 @@ public partial class App : Application
     readonly ManualOverrideStore _manualOverrideStore = new();
     DiscoveryService? _discoveryService;
     LanPairingHost? _pairingHost;
+    LanDiscoveryProbe? _lanDiscoveryProbe;
     PresenceEngine? _presenceEngine;
     PresenceReceiverService? _presenceReceiverService;
     Timer? _presenceBroadcastTimer;
@@ -129,6 +130,7 @@ public partial class App : Application
         if (_mainWindow is not null) _mainWindow.PairingRequested += OnPairingRequested;
 
         StartPairingHost();
+        StartLanDiscoveryProbe();
         StartDiscovery();
         DiagnosticLog.Current.Info("discovery.started", "LAN discovery startup completed.");
         StartPresence();
@@ -302,6 +304,28 @@ public partial class App : Application
         _pairingHost.PairingFailed += OnPairingFailed;
         _pairingHost.Start();
         _mainWindow?.AttachPeerHost(_pairingHost);
+        ReconnectRememberedApprovedPeers();
+    }
+
+    void StartLanDiscoveryProbe()
+    {
+        _lanDiscoveryProbe = new LanDiscoveryProbe(
+            _lifecycle.Identity.PeerId,
+            _lifecycle.Identity.SpkiSha256,
+            PlaceholderControlChannelPort);
+        _lanDiscoveryProbe.PeerAnswered += OnLanProbeAnswered;
+        _lanDiscoveryProbe.Start();
+    }
+
+    void OnLanProbeAnswered(Guid peerId, SpkiPin advertisedSpki, System.Net.IPEndPoint endpoint)
+    {
+        if (_pairingHost is null) return;
+        var approved = _lifecycle.IdentityStore.ApprovedPeers.FirstOrDefault(peer =>
+            peer.PeerId == peerId && !peer.Revoked && peer.SpkiSha256 is { } pin &&
+            SpkiPinConstantTimeComparer.Matches(pin, advertisedSpki));
+        if (approved is null) return;
+        _lifecycle.IdentityStore.UpdateLastKnownEndpoint(peerId, endpoint.Address, endpoint.Port);
+        _ = _pairingHost.ConnectApprovedAsync(endpoint, approved, CancellationToken.None);
     }
 
     void OnPairingRequested(VisiblePeer peer)
@@ -360,8 +384,24 @@ public partial class App : Application
                 .OrderBy(item => item.Address.AddressFamily == System.Net.Sockets.AddressFamily.InterNetwork ? 0 : 1)
                 .FirstOrDefault();
             if (endpoint is null) continue;
+            _lifecycle.IdentityStore.UpdateLastKnownEndpoint(approved.PeerId, endpoint.Address, endpoint.Port);
             _ = _pairingHost.ConnectApprovedAsync(
                 new System.Net.IPEndPoint(endpoint.Address, endpoint.Port), approved, CancellationToken.None);
+        }
+    }
+
+    void ReconnectRememberedApprovedPeers()
+    {
+        if (_pairingHost is null) return;
+        foreach (var approved in _lifecycle.IdentityStore.ApprovedPeers.Where(peer =>
+                     !peer.Revoked && peer.SpkiSha256 is not null &&
+                     peer.LastKnownPort is > 0 and <= 65535 &&
+                     System.Net.IPAddress.TryParse(peer.LastKnownAddress, out _)))
+        {
+            var address = System.Net.IPAddress.Parse(approved.LastKnownAddress!);
+            var endpoint = new System.Net.IPEndPoint(address, approved.LastKnownPort!.Value);
+            DiagnosticLog.Current.Info("peer.reconnect-remembered", $"peer={approved.PeerId} endpoint={endpoint}");
+            _ = _pairingHost.ConnectApprovedAsync(endpoint, approved, CancellationToken.None);
         }
     }
 
@@ -373,6 +413,12 @@ public partial class App : Application
     async void OnQuitRequested()
     {
         Program.RedirectedActivationReceived -= OnRedirectedActivation;
+        if (_mainWindow is not null) await _mainWindow.StopAudioAsync();
+        if (_lanDiscoveryProbe is not null)
+        {
+            _lanDiscoveryProbe.PeerAnswered -= OnLanProbeAnswered;
+            _lanDiscoveryProbe.Dispose();
+        }
         if (_discoveryService is not null)
         {
             _discoveryService.VisiblePeersChanged -= OnVisiblePeersChanged;
