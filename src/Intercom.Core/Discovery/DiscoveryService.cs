@@ -1,5 +1,8 @@
 namespace Intercom.Discovery;
 
+using Intercom.Diagnostics;
+using Intercom.Identity;
+
 /// <summary>
 /// Owns local discovery end to end: registers this device's `_intercom._tcp.local`
 /// advertisement and browses for peers on every eligible interface, re-evaluates
@@ -52,6 +55,7 @@ public sealed class DiscoveryService : IDisposable
         INetworkChangeNotifier networkChange,
         PeerIdHint localPeerIdHint,
         int controlChannelPort,
+        SpkiPin? localSpki = null,
         Func<DateTimeOffset>? clock = null,
         TimeSpan? expirySweepInterval = null)
     {
@@ -68,6 +72,7 @@ public sealed class DiscoveryService : IDisposable
         {
             ProtocolVersion = DiscoveryProtocol.CurrentVersion,
             PeerIdHint = localPeerIdHint,
+            Spki = localSpki,
             Port = controlChannelPort,
         };
 
@@ -101,6 +106,11 @@ public sealed class DiscoveryService : IDisposable
             if (_disposed) return;
 
             var eligible = InterfaceEligibility.FilterEligible(_interfaces.GetCurrentInterfaces());
+            DiagnosticLog.Current.Info(
+                "discovery.interfaces",
+                eligible.Count == 0
+                    ? "No eligible multicast-capable LAN interfaces."
+                    : string.Join("; ", eligible.Select(i => $"{i.Name} ipv4Index={i.Ipv4InterfaceIndex} ipv6Index={i.Ipv6InterfaceIndex} addresses={string.Join(',', i.UnicastAddresses)}")));
             var eligibleById = eligible.ToDictionary(i => i.Id);
 
             // Torn down first: an interface that dropped out shouldn't keep a
@@ -128,10 +138,21 @@ public sealed class DiscoveryService : IDisposable
             {
                 if (_active.ContainsKey(iface.Id)) continue; // already registered/browsing with current addresses
 
-                var registration = _dns.Register(iface, _advertisement);
-                var browse = _dns.Browse(iface, ObserveSignal);
+                IDisposable registration;
+                IDisposable browse;
+                try
+                {
+                    registration = _dns.Register(iface, _advertisement);
+                    browse = _dns.Browse(iface, ObserveSignal);
+                }
+                catch (Exception ex)
+                {
+                    DiagnosticLog.Current.Error("discovery.interface-failed", $"interface={iface.Name} id={iface.Id}", ex);
+                    throw;
+                }
 
                 _active[iface.Id] = new InterfaceRegistration(iface, registration, browse);
+                DiagnosticLog.Current.Info("discovery.interface-active", $"interface={iface.Name} id={iface.Id}");
             }
         }
     }
@@ -146,7 +167,17 @@ public sealed class DiscoveryService : IDisposable
     void ObserveSignal(DiscoverySignal signal)
     {
         if (signal.PeerIdHint == _advertisement.PeerIdHint) return;
+
+        var wasVisible = _visiblePeers.Peers.Any(peer => peer.PeerIdHint == signal.PeerIdHint);
         _visiblePeers.Observe(signal, _clock());
+        var isVisible = _visiblePeers.Peers.Any(peer => peer.PeerIdHint == signal.PeerIdHint);
+
+        // DNS-SD refreshes a live record frequently. Logging every refresh
+        // made the diagnostic file noisy enough to hide actual state changes.
+        if (!wasVisible && isVisible)
+            DiagnosticLog.Current.Info("discovery.peer-visible", $"peer={signal.PeerIdHint} interface={signal.InterfaceId}");
+        else if (wasVisible && !isVisible)
+            DiagnosticLog.Current.Info("discovery.peer-withdrawn", $"peer={signal.PeerIdHint} interface={signal.InterfaceId}");
     }
 
     /// <summary>Content comparison, not reference/record equality:

@@ -46,6 +46,7 @@ public sealed class PairingCeremonyCoordinator
     readonly PairingCeremony _ceremony = new();
     PairingPeerRecord? _remoteRecord;
     string? _code;
+    string? _localFriendlyName;
     bool _finalized;
 
     /// <summary>Raised once both nonces are known and the six-digit code has
@@ -151,6 +152,7 @@ public sealed class PairingCeremonyCoordinator
         lock (_gate)
         {
             shouldSend = !_ceremony.IsTerminal && _ceremony.Phase is not PairingCeremonyPhase.LocalConfirmed;
+            if (shouldSend) _localFriendlyName = friendlyName;
         }
         if (!shouldSend) return;
 
@@ -169,7 +171,7 @@ public sealed class PairingCeremonyCoordinator
             if (_ceremony.Phase == PairingCeremonyPhase.Approved && !_finalized)
             {
                 _finalized = true;
-                newlyApproved = FinalizeApproval(friendlyName);
+                newlyApproved = FinalizeApproval(_localFriendlyName ?? friendlyName);
             }
         }
 

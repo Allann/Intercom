@@ -31,12 +31,16 @@ public sealed class LocalIdentity
         var notBefore = DateTimeOffset.UtcNow.AddMinutes(-5); // small clock-skew allowance
         var notAfter = notBefore.AddYears(ValidityYears);
 
-        // CreateSelfSigned already returns a certificate with a directly usable,
-        // exportable private key — no Windows certificate store involved. An
-        // earlier version of this method re-exported and reloaded it as an
-        // "ephemeral" PKCS#12 for no real benefit, which produced an
-        // NTE_BAD_KEY_STATE crash under package identity. Just keep it.
-        var certificate = request.CreateSelfSigned(notBefore, notAfter);
+        using var generated = request.CreateSelfSigned(notBefore, notAfter);
+
+        // Windows SChannel cannot use an ephemeral private key for TLS server
+        // authentication (SEC_E_NO_CREDENTIALS / 0x8009030E). Rehydrate into
+        // the current user's key store so the same identity can advertise,
+        // listen, and survive app restarts without requiring elevation.
+        var certificate = X509CertificateLoader.LoadPkcs12(
+            generated.Export(X509ContentType.Pfx),
+            password: null,
+            X509KeyStorageFlags.UserKeySet | X509KeyStorageFlags.Exportable);
 
         return new LocalIdentity
         {

@@ -291,7 +291,10 @@ public sealed class IdentityStore
 
             var dto = JsonSerializer.Deserialize<LocalIdentityDto>(plainBytes)
                 ?? throw new InvalidDataException("Empty identity payload.");
-            var certificate = X509CertificateLoader.LoadPkcs12(dto.Pfx, password: null, X509KeyStorageFlags.EphemeralKeySet);
+            var certificate = X509CertificateLoader.LoadPkcs12(
+                dto.Pfx,
+                password: null,
+                X509KeyStorageFlags.UserKeySet | X509KeyStorageFlags.Exportable);
 
             // Expiry is handled identically to corruption/loss (ADR-0002): a
             // new identity, requiring re-pairing everywhere. NotAfter is local

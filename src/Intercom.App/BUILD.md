@@ -1,7 +1,7 @@
 # Building and installing Intercom.App
 
 Intercom is a packaged, x64 WinUI 3 application. The repository pins .NET SDK
-9.0 in `global.json`, while the WinUI/MSIX targets run under Visual Studio's
+10.0 in `global.json`, while the WinUI/MSIX targets run under Visual Studio's
 MSBuild because they depend on Visual Studio's PRI packaging tasks.
 
 ## Prerequisites

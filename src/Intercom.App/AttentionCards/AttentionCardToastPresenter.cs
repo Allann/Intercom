@@ -1,5 +1,6 @@
 using System.Text;
 using Intercom.AttentionCards;
+using Intercom.Diagnostics;
 using Microsoft.UI.Dispatching;
 using Microsoft.UI.Xaml;
 using Microsoft.UI.Xaml.Controls;
@@ -102,8 +103,19 @@ public sealed class AttentionCardToastPresenter : IDisposable
     public void Initialize()
     {
         AppNotificationManager.Default.NotificationInvoked += OnNotificationInvoked;
-        AppNotificationManager.Default.Register();
-        _registered = true;
+        try
+        {
+            AppNotificationManager.Default.Register();
+            _registered = true;
+        }
+        catch
+        {
+            // Registration is transactional: if Windows rejects the COM/
+            // notification registration, don't leave a handler attached to
+            // the singleton manager for a presenter the app cannot use.
+            AppNotificationManager.Default.NotificationInvoked -= OnNotificationInvoked;
+            throw;
+        }
     }
 
     /// <summary>Builds and shows one native toast for <paramref name="card"/>.
@@ -124,10 +136,9 @@ public sealed class AttentionCardToastPresenter : IDisposable
     /// <see cref="AttentionCard.Icon"/> as a plain text glyph, so the toast
     /// does the same, just rasterized (toast logos are images, not text) via
     /// <see cref="RenderIconAsync"/>.</para></summary>
-    public async Task ShowAsync(AttentionCard card, string fromLabel)
+    public Task ShowAsync(AttentionCard card, string fromLabel)
     {
         var cardId = card.MessageId.ToString();
-        var iconUri = await RenderIconAsync(card.Icon).ConfigureAwait(true);
 
         var builder = new AppNotificationBuilder()
             .AddArgument("cardId", cardId)
@@ -145,12 +156,10 @@ public sealed class AttentionCardToastPresenter : IDisposable
                 .AddArgument("cardId", cardId)
                 .AddArgument("action", "Dismiss"));
 
-        if (iconUri is not null)
-        {
-            builder.SetAppLogoOverride(iconUri, AppNotificationImageCrop.Circle);
-        }
-
+        DiagnosticLog.Current.Info("notifications.show-requested", $"card={card.MessageId}");
         AppNotificationManager.Default.Show(builder.BuildNotification());
+        DiagnosticLog.Current.Info("notifications.show-submitted", $"card={card.MessageId}");
+        return Task.CompletedTask;
     }
 
     /// <summary>Rasterizes <paramref name="icon"/> (a single emoji glyph, per

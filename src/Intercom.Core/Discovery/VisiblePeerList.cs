@@ -83,6 +83,7 @@ public sealed class VisiblePeerList
                         PeerIdHint = signal.PeerIdHint,
                         InterfaceId = signal.InterfaceId,
                         ProtocolVersion = seen.ProtocolVersion,
+                        Spki = seen.Spki,
                         Endpoint = endpoint,
                         FirstSeenAt = firstSeenAt,
                         LastSeenAt = now,
@@ -158,6 +159,7 @@ public sealed class VisiblePeerList
             // sighting's version as the representative value rather than
             // silently picking an arbitrary one.
             ProtocolVersion = sightings.OrderByDescending(s => s.LastSeenAt).First().ProtocolVersion,
+            Spki = sightings.OrderByDescending(s => s.LastSeenAt).First().Spki,
             Endpoints = sightings.Select(s => s.Endpoint).ToList(),
             FirstSeenAt = sightings.Min(s => s.FirstSeenAt),
             LastSeenAt = sightings.Max(s => s.LastSeenAt),
@@ -171,6 +173,7 @@ public sealed class VisiblePeerList
         public required PeerIdHint PeerIdHint { get; init; }
         public required string InterfaceId { get; init; }
         public required int ProtocolVersion { get; init; }
+        public Intercom.Identity.SpkiPin? Spki { get; init; }
         public required PeerEndpoint Endpoint { get; init; }
         public required DateTimeOffset FirstSeenAt { get; init; }
         public required DateTimeOffset LastSeenAt { get; init; }

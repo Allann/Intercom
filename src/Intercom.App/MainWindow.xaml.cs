@@ -9,14 +9,15 @@ using Windows.UI;
 using WinRT.Interop;
 using Intercom.AttentionCards;
 using Intercom.Chat;
+using Intercom.Diagnostics;
 using Intercom.Discovery;
 using Intercom.Identity;
 using Intercom.Lifecycle;
 using Intercom.Presence;
+using Intercom.Pairing;
 using Intercom.Updates;
 using Intercom.App.AttentionCards;
 using Intercom.App.Chat;
-using Intercom.App.Pairing;
 
 namespace Intercom.App;
 
@@ -39,6 +40,7 @@ public sealed partial class MainWindow : Window, IResidentWindow
     static readonly SolidColorBrush Mustard = new(Color.FromArgb(255, 0xE8, 0xA3, 0x3D));
 
     public event Action? QuitRequested;
+    public event Action<VisiblePeer>? PairingRequested;
 
     public nint Hwnd { get; }
     public AppWindow AppWin { get; }
@@ -55,14 +57,15 @@ public sealed partial class MainWindow : Window, IResidentWindow
 
     ChatTtsSettingsStore? _chatTtsSettings;
     ChatSpeechService? _chatSpeechService;
-    ChatService? _chatServiceLocal;
-    ChatService? _chatServicePeer;
+    readonly Dictionary<Guid, ChatService> _chatServices = [];
 
     // ---- Issue #25: attention cards ----
     const string CustomComposerPresetLabel = "Custom…";
 
-    AttentionCardService? _attentionCardServiceLocal;
-    AttentionCardService? _attentionCardServicePeer;
+    readonly Dictionary<Guid, AttentionCardService> _attentionCardServices = [];
+    LanPairingHost? _peerHost;
+    Guid? _selectedChatPeerId;
+    Guid? _selectedAttentionPeerId;
     AttentionCardToastPresenter? _attentionCardToastPresenter;
     string _selectedComposerIcon = AttentionCardPresets.Presets[0].Icon;
 
@@ -71,13 +74,17 @@ public sealed partial class MainWindow : Window, IResidentWindow
     // "the approved peer this drawer is talking to" purely so the per-peer
     // spoken-chat toggle (issue #24 requirement 4) has a real key to persist
     // against for the lifetime of this demo session.
-    readonly Guid _demoPeerId = Guid.NewGuid();
 
     // Guards re-entrant CheckBox.Checked/Unchecked firing while
     // RenderChatSpokenToggle programmatically sets IsChecked to reflect
     // loaded state, so that doesn't get misread as a user action and
     // re-persisted as a no-op toggle.
     bool _suppressSpokenChatToggleHandler;
+    IReadOnlyList<VisiblePeer> _lastDiscoveredPeers = [];
+    bool _refreshingPeerChoices;
+    bool _hasGroupFloor;
+    bool _handRaised;
+    bool _handsFreeActive;
 
     public MainWindow()
     {
@@ -165,14 +172,198 @@ public sealed partial class MainWindow : Window, IResidentWindow
     /// thread.</summary>
     public void UpdateDiscoveredPeers(IReadOnlyList<VisiblePeer> peers)
     {
-        NoDiscoveredPeersNotice.Visibility = peers.Count == 0 ? Visibility.Visible : Visibility.Collapsed;
-        DiscoveredPeersList.ItemsSource = peers.Select(DescribePeer).ToList();
+        _lastDiscoveredPeers = peers;
+        var approvedPeers = _identityStore?.ApprovedPeers.Where(peer => !peer.Revoked).ToList() ?? [];
+        var pairablePeers = peers.Where(peer => peer.Spki is not null
+            && !approvedPeers.Any(approved => approved.PeerId.ToString("N").Equals(peer.PeerIdHint.Value, StringComparison.OrdinalIgnoreCase))).ToList();
+        NoDiscoveredPeersNotice.Visibility = approvedPeers.Count == 0 && pairablePeers.Count == 0 ? Visibility.Visible : Visibility.Collapsed;
+        DiscoveredPeersList.Children.Clear();
+        foreach (var approved in approvedPeers)
+        {
+            var online = _peerHost?.ConnectedPeerIds.Contains(approved.PeerId) == true;
+            DiscoveredPeersList.Children.Add(new Button
+            {
+                Content = $"✓ {approved.FriendlyName} · {(online ? "online" : "offline")}",
+                HorizontalAlignment = HorizontalAlignment.Stretch,
+                HorizontalContentAlignment = HorizontalAlignment.Center,
+                IsEnabled = false,
+            });
+        }
+        foreach (var peer in pairablePeers)
+        {
+            var peerId = Guid.TryParseExact(peer.PeerIdHint.Value, "N", out var parsed) ? parsed : Guid.Empty;
+            var button = new Button
+            {
+                Content = $"Pair {DescribePeer(peer)}",
+                HorizontalAlignment = HorizontalAlignment.Stretch,
+                HorizontalContentAlignment = HorizontalAlignment.Center,
+                IsEnabled = true,
+            };
+            button.Click += (_, _) => PairingRequested?.Invoke(peer);
+            DiscoveredPeersList.Children.Add(button);
+        }
+        DiagnosticLog.Current.Info(
+            "ui.nearby-devices-rendered",
+            peers.Count == 0
+                ? "count=0"
+                : $"count={peers.Count} peers={string.Join(',', peers.Select(peer => peer.PeerIdHint))}");
+        RefreshMessagingPeers();
     }
 
     static string DescribePeer(VisiblePeer peer)
     {
-        var endpoints = string.Join(", ", peer.Endpoints.Select(e => $"{e.Address}:{e.Port} ({e.InterfaceId})"));
-        return $"{peer.PeerIdHint} — v{peer.ProtocolVersion} — {endpoints}";
+        var id = peer.PeerIdHint.ToString();
+        var shortCode = id.Length <= 6 ? id : id[^6..];
+        return $"Nearby Intercom · {shortCode.ToUpperInvariant()}";
+    }
+
+    async void OnAddFamilyMemberClick(object sender, RoutedEventArgs e)
+    {
+        var approvedIds = (_identityStore?.ApprovedPeers ?? []).Where(peer => !peer.Revoked).Select(peer => peer.PeerId).ToHashSet();
+        var candidate = _lastDiscoveredPeers.FirstOrDefault(peer => peer.Spki is not null
+            && Guid.TryParseExact(peer.PeerIdHint.Value, "N", out var id) && !approvedIds.Contains(id));
+        if (candidate is not null)
+        {
+            PairingRequested?.Invoke(candidate);
+            return;
+        }
+
+        await new ContentDialog
+        {
+            Title = "Add Family Member",
+            Content = "Open Intercom on the other PC. It will appear here automatically when both PCs are on the same private network.",
+            CloseButtonText = "Done",
+            XamlRoot = Content.XamlRoot,
+        }.ShowAsync();
+    }
+
+    void OnRaiseHandClick(object sender, RoutedEventArgs e)
+    {
+        _handRaised = !_handRaised;
+        _hasGroupFloor = _handRaised;
+        RaiseHandButton.Content = _handRaised ? "✓ Floor Granted" : "✋ Raise Hand";
+        GroupFloorSpeakerText.Text = _handRaised ? "● You have the floor" : "● Nobody has the floor";
+        GroupFloorCoordinatorText.Text = _handRaised ? "You are coordinator" : "Start a floor to become coordinator";
+        EndFloorButton.Visibility = _handRaised ? Visibility.Visible : Visibility.Collapsed;
+        RenderVoiceControls();
+    }
+
+    void OnInterruptClick(object sender, RoutedEventArgs e)
+    {
+        _handRaised = true;
+        _hasGroupFloor = true;
+        RaiseHandButton.Content = "✓ Floor Granted";
+        GroupFloorSpeakerText.Text = "● You have the floor";
+        GroupFloorCoordinatorText.Text = "Interrupt granted directly";
+        EndFloorButton.Visibility = Visibility.Visible;
+        RenderVoiceControls();
+    }
+
+    void OnEndFloorClick(object sender, RoutedEventArgs e)
+    {
+        _handRaised = false;
+        _hasGroupFloor = false;
+        RaiseHandButton.Content = "✋ Raise Hand";
+        GroupFloorSpeakerText.Text = "● Nobody has the floor";
+        GroupFloorCoordinatorText.Text = "Start a floor to become coordinator";
+        EndFloorButton.Visibility = Visibility.Collapsed;
+        RenderVoiceControls();
+    }
+
+    void OnHandsFreeClick(object sender, RoutedEventArgs e)
+    {
+        if (HandsFreeRecipientCombo.SelectedItem is not PeerChoice choice) return;
+        _handsFreeActive = !_handsFreeActive;
+        HandsFreeStatusText.Text = _handsFreeActive ? $"Hands-free with {choice.FriendlyName}" : "No hands-free session";
+        HandsFreeButton.Content = _handsFreeActive ? "End" : "Start Hands-Free";
+        HandsFreeButton.Background = _handsFreeActive ? DndRed : AvailableGreen;
+        HandsFreeRecipientCombo.IsEnabled = !_handsFreeActive;
+        RenderVoiceControls();
+    }
+
+    void OnHandsFreeRecipientChanged(object sender, SelectionChangedEventArgs e) => UpdateMessagingEnabled();
+
+    void OnPushToTalkPressed(object sender, Microsoft.UI.Xaml.Input.PointerRoutedEventArgs e)
+    {
+        PushToTalkButton.Content = "On Air";
+        PushToTalkButton.Background = Mustard;
+        PushToTalkHint.Text = "Transmitting while held.";
+    }
+
+    void OnPushToTalkReleased(object sender, Microsoft.UI.Xaml.Input.PointerRoutedEventArgs e) => RenderVoiceControls();
+
+    void RenderVoiceControls()
+    {
+        PushToTalkButton.IsEnabled = _hasGroupFloor || _handsFreeActive;
+        PushToTalkButton.Content = new TextBlock { Text = "Hold to\nTalk", TextAlignment = TextAlignment.Center };
+        PushToTalkButton.Background = _hasGroupFloor || _handsFreeActive ? DndRed : new SolidColorBrush(Color.FromArgb(255, 0xCB, 0xBF, 0xA4));
+        PushToTalkHint.Text = PushToTalkButton.IsEnabled
+            ? "Hold the button while you speak."
+            : "Enabled when you hold the group floor or a hands-free session.";
+    }
+
+    public async void ShowPairingCode(
+        Guid peerId,
+        string code,
+        Func<string, Task> confirm,
+        Func<Task> reject)
+    {
+        var name = new TextBox { Header = "Name this family member or device", PlaceholderText = "e.g. Kitchen PC" };
+        var content = new StackPanel { Spacing = 12 };
+        content.Children.Add(new TextBlock
+        {
+            Text = "Check that this same code appears on the other PC:",
+            TextWrapping = TextWrapping.Wrap,
+        });
+        content.Children.Add(new TextBlock
+        {
+            Text = code,
+            FontSize = 32,
+            FontWeight = FontWeights.Bold,
+            HorizontalAlignment = HorizontalAlignment.Center,
+        });
+        content.Children.Add(name);
+
+        var dialog = new ContentDialog
+        {
+            Title = "Pair nearby Intercom",
+            Content = content,
+            PrimaryButtonText = "Codes match",
+            SecondaryButtonText = "Reject",
+            CloseButtonText = "Cancel",
+            XamlRoot = Content.XamlRoot,
+        };
+
+        DiagnosticLog.Current.Info("ui.pairing-code-shown", $"peer={peerId}");
+        var result = await dialog.ShowAsync();
+        if (result == ContentDialogResult.Primary)
+            await confirm(name.Text);
+        else
+            await reject();
+    }
+
+    public async void ShowPairingApproved(string friendlyName)
+    {
+        var dialog = new ContentDialog
+        {
+            Title = "Family member added",
+            Content = $"{friendlyName} is now securely paired with this PC.",
+            CloseButtonText = "Done",
+            XamlRoot = Content.XamlRoot,
+        };
+        await dialog.ShowAsync();
+    }
+
+    public async void ShowPairingFailed(string message)
+    {
+        var dialog = new ContentDialog
+        {
+            Title = "Couldn’t connect to that PC",
+            Content = message,
+            CloseButtonText = "Close",
+            XamlRoot = Content.XamlRoot,
+        };
+        await dialog.ShowAsync();
     }
 
     /// <summary>Issue #22: gives this window access to the real
@@ -183,12 +374,11 @@ public sealed partial class MainWindow : Window, IResidentWindow
     /// window factory is a parameterless <c>Func&lt;IResidentWindow&gt;</c>.</summary>
     public void AttachIdentityStore(IdentityStore identityStore) => _identityStore = identityStore;
 
-    async void OnAddFamilyMemberClick(object sender, RoutedEventArgs e)
+    public void AttachPeerHost(LanPairingHost peerHost)
     {
-        if (_identityStore is null) return;
-
-        var dialog = new PairingDialog(_identityStore) { XamlRoot = Content.XamlRoot };
-        await dialog.ShowAsync();
+        _peerHost = peerHost;
+        peerHost.ConnectionsChanged += () => _dispatcherQueue.TryEnqueue(() => UpdateDiscoveredPeers(_lastDiscoveredPeers));
+        RefreshMessagingPeers();
     }
 
     /// <summary>Issue #23: gives this window access to the real
@@ -242,18 +432,74 @@ public sealed partial class MainWindow : Window, IResidentWindow
     /// buttons can make the simulated peer actually send real frames back.</summary>
     void InitializeChatDrawer()
     {
-        var (localTransport, peerTransport) = LoopbackChatTransport.CreatePair();
-        _chatServiceLocal = new ChatService(localTransport);
-        _chatServicePeer = new ChatService(peerTransport);
-
-        _chatServiceLocal.MessageReceived += OnIncomingChatMessage;
-        _chatServiceLocal.Conversation.MessageAdded += _ => _dispatcherQueue.TryEnqueue(RenderChatMessages);
-        _chatServiceLocal.Conversation.MessageUpdated += _ => _dispatcherQueue.TryEnqueue(RenderChatMessages);
-
         RenderChatMessages();
     }
 
-    void OnIncomingChatMessage(ChatMessage message)
+    void RefreshMessagingPeers()
+    {
+        if (_peerHost is null || _identityStore is null) return;
+        var peers = _identityStore.ApprovedPeers.Where(peer => !peer.Revoked).ToList();
+        foreach (var peer in peers)
+        {
+            if (!_chatServices.ContainsKey(peer.PeerId))
+            {
+                var chat = new ChatService(_peerHost.CreateChatTransport(peer.PeerId));
+                chat.MessageReceived += message => OnIncomingChatMessage(peer.PeerId, message);
+                chat.Conversation.MessageAdded += _ => _dispatcherQueue.TryEnqueue(RenderChatMessages);
+                chat.Conversation.MessageUpdated += _ => _dispatcherQueue.TryEnqueue(RenderChatMessages);
+                _chatServices[peer.PeerId] = chat;
+
+                var cards = new AttentionCardService(_peerHost.CreateAttentionCardTransport(peer.PeerId));
+                cards.CardReceived += card => OnIncomingAttentionCard(peer.PeerId, card);
+                cards.Conversation.CardAdded += _ => _dispatcherQueue.TryEnqueue(RenderAttentionCardShelf);
+                cards.Conversation.CardUpdated += _ => _dispatcherQueue.TryEnqueue(RenderAttentionCardShelf);
+                _attentionCardServices[peer.PeerId] = cards;
+            }
+        }
+        var choices = peers.Select(peer => new PeerChoice(peer.PeerId, peer.FriendlyName,
+            $"{peer.FriendlyName} ({(_peerHost.ConnectedPeerIds.Contains(peer.PeerId) ? "online" : "offline")})")).ToList();
+        _refreshingPeerChoices = true;
+        ChatRecipientCombo.ItemsSource = choices;
+        ComposerRecipientCombo.ItemsSource = choices.ToList();
+        HandsFreeRecipientCombo.ItemsSource = choices.ToList();
+        ChatRecipientCombo.SelectedIndex = choices.FindIndex(choice => choice.PeerId == _selectedChatPeerId);
+        ComposerRecipientCombo.SelectedIndex = choices.FindIndex(choice => choice.PeerId == _selectedAttentionPeerId);
+        if (ChatRecipientCombo.SelectedIndex < 0 && choices.Count > 0) ChatRecipientCombo.SelectedIndex = 0;
+        if (ComposerRecipientCombo.SelectedIndex < 0 && choices.Count > 0) ComposerRecipientCombo.SelectedIndex = 0;
+        if (HandsFreeRecipientCombo.SelectedIndex < 0 && choices.Count > 0) HandsFreeRecipientCombo.SelectedIndex = 0;
+        _selectedChatPeerId = (ChatRecipientCombo.SelectedItem as PeerChoice)?.PeerId;
+        _selectedAttentionPeerId = (ComposerRecipientCombo.SelectedItem as PeerChoice)?.PeerId;
+        _refreshingPeerChoices = false;
+        UpdateMessagingEnabled();
+    }
+
+    void UpdateMessagingEnabled()
+    {
+        if (_peerHost is null) return;
+        ChatSendButton.IsEnabled = _selectedChatPeerId is Guid chatPeer && _peerHost.ConnectedPeerIds.Contains(chatPeer);
+        SendAttentionCardButton.IsEnabled = _selectedAttentionPeerId is Guid cardPeer && _peerHost.ConnectedPeerIds.Contains(cardPeer);
+        HandsFreeButton.IsEnabled = HandsFreeRecipientCombo.SelectedItem is PeerChoice handsFreePeer
+            && _peerHost.ConnectedPeerIds.Contains(handsFreePeer.PeerId);
+    }
+
+    void OnChatRecipientChanged(object sender, SelectionChangedEventArgs e)
+    {
+        if (_refreshingPeerChoices) return;
+        _selectedChatPeerId = (ChatRecipientCombo.SelectedItem as PeerChoice)?.PeerId;
+        UpdateMessagingEnabled();
+        RenderChatSpokenToggle();
+        RenderChatMessages();
+    }
+
+    void OnAttentionRecipientChanged(object sender, SelectionChangedEventArgs e)
+    {
+        if (_refreshingPeerChoices) return;
+        _selectedAttentionPeerId = (ComposerRecipientCombo.SelectedItem as PeerChoice)?.PeerId;
+        UpdateMessagingEnabled();
+        RenderAttentionCardShelf();
+    }
+
+    void OnIncomingChatMessage(Guid peerId, ChatMessage message)
     {
         // MessageReceived can in principle fire off the UI thread (a real
         // PeerControlChannel's receive loop is not the UI thread) — the
@@ -277,7 +523,7 @@ public sealed partial class MainWindow : Window, IResidentWindow
             if (DndPolicy.IsSuppressed(dndEnabled, InteractionKind.AttentionChime)) return;
 
             ShowChatChime();
-            if (_chatTtsSettings?.IsEnabled(_demoPeerId) == true)
+            if (_chatTtsSettings?.IsEnabled(peerId) == true)
             {
                 _ = _chatSpeechService?.SpeakAsync(message.Text);
             }
@@ -300,12 +546,12 @@ public sealed partial class MainWindow : Window, IResidentWindow
 
     async Task SendChatTextAsync(string text)
     {
-        if (_chatServiceLocal is null || string.IsNullOrWhiteSpace(text)) return;
+        if (_selectedChatPeerId is not Guid peerId || !_chatServices.TryGetValue(peerId, out var chatService) || string.IsNullOrWhiteSpace(text)) return;
 
         ChatInputBox.Text = "";
         try
         {
-            await _chatServiceLocal.SendAsync(text, CancellationToken.None);
+            await chatService.SendAsync(text, CancellationToken.None);
         }
         catch
         {
@@ -315,41 +561,25 @@ public sealed partial class MainWindow : Window, IResidentWindow
         }
     }
 
-    void OnSimulatePeerReplyClick(object sender, RoutedEventArgs e)
-    {
-        if (_chatServicePeer is null) return;
-        _ = _chatServicePeer.SendAsync("On my way 👍", CancellationToken.None);
-    }
-
-    void OnSimulateDropClick(object sender, RoutedEventArgs e)
-    {
-        // Demonstrates the "message in flight when the connection drops
-        // shows undelivered, no silent auto-resend" acceptance criterion —
-        // a loopback pair has no real socket to actually sever, so this is
-        // the demo's explicit stand-in (see LoopbackChatTransport.SimulateDrop).
-        _chatServiceLocal?.Conversation.MarkAllPendingUndelivered();
-    }
-
     void OnSpokenChatToggled(object sender, RoutedEventArgs e)
     {
         if (_suppressSpokenChatToggleHandler || _chatTtsSettings is null) return;
-        _chatTtsSettings.SetEnabled(_demoPeerId, SpokenChatCheckBox.IsChecked == true);
+        if (_selectedChatPeerId is Guid peerId) _chatTtsSettings.SetEnabled(peerId, SpokenChatCheckBox.IsChecked == true);
     }
 
     void RenderChatSpokenToggle()
     {
         if (_chatTtsSettings is null) return;
         _suppressSpokenChatToggleHandler = true;
-        SpokenChatCheckBox.IsChecked = _chatTtsSettings.IsEnabled(_demoPeerId);
+        SpokenChatCheckBox.IsChecked = _selectedChatPeerId is Guid peerId && _chatTtsSettings.IsEnabled(peerId);
         _suppressSpokenChatToggleHandler = false;
     }
 
     void RenderChatMessages()
     {
-        if (_chatServiceLocal is null) return;
-
         ChatMessagesPanel.Children.Clear();
-        foreach (var message in _chatServiceLocal.Conversation.Messages)
+        if (_selectedChatPeerId is not Guid peerId || !_chatServices.TryGetValue(peerId, out var service)) return;
+        foreach (var message in service.Conversation.Messages)
         {
             ChatMessagesPanel.Children.Add(BuildChatMessageBubble(message));
         }
@@ -440,26 +670,18 @@ public sealed partial class MainWindow : Window, IResidentWindow
     /// back.</summary>
     void InitializeAttentionCardShelf()
     {
-        var (localTransport, peerTransport) = LoopbackAttentionCardTransport.CreatePair();
-        _attentionCardServiceLocal = new AttentionCardService(localTransport);
-        _attentionCardServicePeer = new AttentionCardService(peerTransport);
-
-        _attentionCardServiceLocal.CardReceived += OnIncomingAttentionCard;
-        _attentionCardServiceLocal.Conversation.CardAdded += _ => _dispatcherQueue.TryEnqueue(RenderAttentionCardShelf);
-        _attentionCardServiceLocal.Conversation.CardUpdated += _ => _dispatcherQueue.TryEnqueue(RenderAttentionCardShelf);
-
         RenderComposerPresets();
         RenderEmojiPicker();
         RenderAttentionCardShelf();
     }
 
-    void OnIncomingAttentionCard(AttentionCard card)
+    void OnIncomingAttentionCard(Guid peerId, AttentionCard card)
     {
         // CardReceived can in principle fire off the UI thread (a real
         // PeerControlChannel's receive loop is not the UI thread) — mirrors
         // OnIncomingChatMessage's identical caution, even though the
         // loopback demo happens to call back synchronously today.
-        _dispatcherQueue.TryEnqueue(() =>
+        _dispatcherQueue.TryEnqueue(async () =>
         {
             var dndEnabled = _dndSettings?.DndEnabled ?? false;
 
@@ -471,10 +693,37 @@ public sealed partial class MainWindow : Window, IResidentWindow
             // shelf via CardAdded) — only the native-toast CREATION below is
             // gated, reusing the exact same DndPolicy predicate/InteractionKind
             // OnIncomingChatMessage uses for the chat chime.
-            if (DndPolicy.IsSuppressed(dndEnabled, InteractionKind.AttentionChime)) return;
+            if (DndPolicy.IsSuppressed(dndEnabled, InteractionKind.AttentionChime))
+            {
+                DiagnosticLog.Current.Info("attention-card.toast-suppressed", $"card={card.MessageId} reason=dnd");
+                return;
+            }
 
-            _ = _attentionCardToastPresenter?.ShowAsync(card, fromLabel: "the demo peer");
+            var from = _identityStore?.ApprovedPeers.FirstOrDefault(peer => peer.PeerId == peerId)?.FriendlyName ?? "a family member";
+            if (_attentionCardToastPresenter is null)
+            {
+                DiagnosticLog.Current.Warning("attention-card.toast-failed", $"card={card.MessageId} reason=presenter-unavailable");
+                ShowIncomingAttentionFallback(card, from);
+                return;
+            }
+
+            try
+            {
+                await _attentionCardToastPresenter.ShowAsync(card, fromLabel: from);
+                DiagnosticLog.Current.Info("attention-card.toast-shown", $"card={card.MessageId} from={peerId}");
+            }
+            catch (Exception ex)
+            {
+                DiagnosticLog.Current.Error("attention-card.toast-failed", $"card={card.MessageId} from={peerId}", ex);
+                ShowIncomingAttentionFallback(card, from);
+            }
         });
+    }
+
+    void ShowIncomingAttentionFallback(AttentionCard card, string from)
+    {
+        IncomingAttentionNotice.Message = $"{card.Icon}  {card.Purpose} — from {from}";
+        IncomingAttentionNotice.IsOpen = true;
     }
 
     /// <summary>Called by App.xaml.cs when a native toast's Acknowledge
@@ -485,8 +734,12 @@ public sealed partial class MainWindow : Window, IResidentWindow
     /// <see cref="AttentionCardService.AcknowledgeAsync"/>'s own
     /// sent-card guard), so this always targets <c>_attentionCardServiceLocal</c>,
     /// never the demo peer service.</summary>
-    public Task AcknowledgeAttentionCardAsync(Guid cardMessageId, CancellationToken cancellationToken) =>
-        _attentionCardServiceLocal?.AcknowledgeAsync(cardMessageId, cancellationToken) ?? Task.CompletedTask;
+    public Task AcknowledgeAttentionCardAsync(Guid cardMessageId, CancellationToken cancellationToken)
+    {
+        var service = _attentionCardServices.Values.FirstOrDefault(candidate =>
+            candidate.Conversation.Cards.Any(card => card.MessageId == cardMessageId));
+        return service?.AcknowledgeAsync(cardMessageId, cancellationToken) ?? Task.CompletedTask;
+    }
 
     void RenderComposerPresets()
     {
@@ -544,7 +797,7 @@ public sealed partial class MainWindow : Window, IResidentWindow
 
     async Task SendAttentionCardAsync()
     {
-        if (_attentionCardServiceLocal is null) return;
+        if (_selectedAttentionPeerId is not Guid peerId || !_attentionCardServices.TryGetValue(peerId, out var cardService)) return;
 
         var isCustom = ComposerPresetCombo.SelectedItem as string == CustomComposerPresetLabel;
         var purpose = isCustom ? ComposerCustomTextBox.Text.Trim() : ComposerPresetCombo.SelectedItem as string ?? "";
@@ -552,7 +805,7 @@ public sealed partial class MainWindow : Window, IResidentWindow
 
         try
         {
-            await _attentionCardServiceLocal.SendAsync(purpose, _selectedComposerIcon, CancellationToken.None);
+            await cardService.SendAsync(purpose, _selectedComposerIcon, CancellationToken.None);
         }
         catch
         {
@@ -564,27 +817,11 @@ public sealed partial class MainWindow : Window, IResidentWindow
         if (isCustom) ComposerCustomTextBox.Text = "";
     }
 
-    void OnSimulatePeerAttentionCardClick(object sender, RoutedEventArgs e)
-    {
-        if (_attentionCardServicePeer is null) return;
-        var preset = AttentionCardPresets.Presets[0];
-        _ = _attentionCardServicePeer.SendAsync(preset.Purpose, preset.Icon, CancellationToken.None);
-    }
-
-    void OnSimulateAttentionCardDropClick(object sender, RoutedEventArgs e)
-    {
-        // Demonstrates the same "in-flight send when the connection drops
-        // shows undelivered, no silent auto-resend" behavior as chat's
-        // identical demo button — a loopback pair has no real socket to
-        // actually sever (see LoopbackAttentionCardTransport.SimulateDrop).
-        _attentionCardServiceLocal?.Conversation.MarkAllPendingUndelivered();
-    }
-
     void RenderAttentionCardShelf()
     {
-        if (_attentionCardServiceLocal is null) return;
-
-        var cards = _attentionCardServiceLocal.Conversation.Cards;
+        var cards = _selectedAttentionPeerId is Guid peerId && _attentionCardServices.TryGetValue(peerId, out var service)
+            ? service.Conversation.Cards
+            : [];
         NoAttentionCardsNotice.Visibility = cards.Count == 0 ? Visibility.Visible : Visibility.Collapsed;
 
         AttentionCardShelfPanel.Children.Clear();
@@ -672,5 +909,10 @@ public sealed partial class MainWindow : Window, IResidentWindow
             AttentionCardDeliveryState.Undelivered => "undelivered",
             _ => "",
         };
+    }
+
+    sealed record PeerChoice(Guid PeerId, string FriendlyName, string Label)
+    {
+        public override string ToString() => Label;
     }
 }

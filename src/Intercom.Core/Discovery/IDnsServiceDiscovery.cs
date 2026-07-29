@@ -8,9 +8,10 @@ namespace Intercom.Discovery;
 /// (<see cref="VisiblePeerList"/>, <see cref="DiscoveryService"/>) that
 /// depend on this interface, so they're fully unit-testable with a fake —
 /// the same seam pattern as ITrayIcon/IStartupService in Intercom.Lifecycle.
-/// The real implementation (<see cref="Win32DnsServiceDiscovery"/>) cannot be
-/// exercised in a normal CI/test sandbox: it requires a live Windows mDNS
-/// responder and firewall-permitted multicast traffic.
+/// The real implementation (<see cref="Win32DnsServiceDiscovery"/>) is
+/// exercised by tests/Intercom.Discovery.Integration on a Windows host with
+/// an active multicast-capable LAN interface. It remains outside the normal
+/// unit-test suite because many CI sandboxes provide neither condition.
 /// </summary>
 public interface IDnsServiceDiscovery
 {

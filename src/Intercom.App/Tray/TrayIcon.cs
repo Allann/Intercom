@@ -1,5 +1,6 @@
 using System.Runtime.InteropServices;
 using Intercom.Lifecycle;
+using Intercom.Diagnostics;
 using System.IO;
 
 namespace Intercom.App.Tray;
@@ -21,10 +22,12 @@ public sealed class TrayIcon : ITrayIcon
     const uint NIF_TIP = 0x00000004;
     const uint NIF_GUID = 0x00000020;
     const uint NOTIFYICON_VERSION_4 = 4;
+    const uint NumericIconId = 1;
 
     readonly IntPtr _hwnd;
     readonly Guid _iconGuid;
     bool _added;
+    bool _usesGuid;
 
     public TrayIcon(IntPtr hwnd, Guid stableIconGuid)
     {
@@ -34,50 +37,59 @@ public sealed class TrayIcon : ITrayIcon
 
     public void Add(string tooltip)
     {
-        var data = MakeData(tooltip);
+        var data = MakeData(tooltip, useGuid: true);
         _added = Shell_NotifyIconW(NIM_ADD, ref data);
         if (!_added)
         {
-            throw new InvalidOperationException("Windows could not add the Intercom notification-area icon.");
+            DiagnosticLog.Current.Warning("tray.guid-add-failed", $"hwnd=0x{_hwnd:X}; retrying with numeric icon ID.");
+            data = MakeData(tooltip, useGuid: false);
+            _added = Shell_NotifyIconW(NIM_ADD, ref data);
+            if (!_added)
+                throw new InvalidOperationException("Windows could not add the Intercom notification-area icon using either GUID or numeric identity.");
         }
+        _usesGuid = (data.uFlags & NIF_GUID) != 0;
 
         data.uVersionOrTimeout = NOTIFYICON_VERSION_4;
         if (!Shell_NotifyIconW(NIM_SETVERSION, ref data))
         {
-            Remove();
-            throw new InvalidOperationException("Windows could not configure the Intercom notification-area icon.");
+            // The icon is already present. VERSION_4 improves callback
+            // semantics but is not required for the legacy mouse messages
+            // TrayMessagePump also handles, so keep the usable icon.
+            DiagnosticLog.Current.Warning("tray.version-failed", "Tray icon added, but NOTIFYICON_VERSION_4 was rejected; using legacy callbacks.");
         }
+        DiagnosticLog.Current.Info("tray.added", $"identity={(_usesGuid ? "guid" : "numeric")} hwnd=0x{_hwnd:X}");
     }
 
     public void SetFocus()
     {
         if (!_added) return;
-        var data = MakeData(string.Empty);
+        var data = MakeData(string.Empty, _usesGuid);
         Shell_NotifyIconW(NIM_SETFOCUS, ref data);
     }
 
     public void UpdateTooltip(string tooltip)
     {
         if (!_added) return;
-        var data = MakeData(tooltip);
+        var data = MakeData(tooltip, _usesGuid);
         Shell_NotifyIconW(NIM_MODIFY, ref data);
     }
 
     public void Remove()
     {
         if (!_added) return;
-        var data = MakeData(string.Empty);
+        var data = MakeData(string.Empty, _usesGuid);
         Shell_NotifyIconW(NIM_DELETE, ref data);
         _added = false;
     }
 
-    NOTIFYICONDATAW MakeData(string tooltip)
+    NOTIFYICONDATAW MakeData(string tooltip, bool useGuid)
     {
         return new NOTIFYICONDATAW
         {
             cbSize = Marshal.SizeOf<NOTIFYICONDATAW>(),
             hWnd = _hwnd,
-            uFlags = NIF_MESSAGE | NIF_ICON | NIF_TIP | NIF_GUID,
+            uID = NumericIconId,
+            uFlags = NIF_MESSAGE | NIF_ICON | NIF_TIP | (useGuid ? NIF_GUID : 0),
             uCallbackMessage = TrayInterop.CallbackMessage,
             hIcon = LoadIconForApp(),
             szTip = tooltip,

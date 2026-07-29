@@ -82,7 +82,19 @@ public sealed class AppLifecycle
         _trayPump.FocusReturnRequested += () => _trayIcon?.SetFocus();
 
         _trayIcon = _createTrayIcon(_window.Hwnd);
-        _trayIcon.Add("Intercom");
+        try
+        {
+            _trayIcon.Add("Intercom");
+        }
+        catch (Exception ex)
+        {
+            // The notification-area icon is valuable resident-app UI, but a
+            // shell refusal must not prevent the main window, discovery, and
+            // communications from starting. Keep the failure observable.
+            DiagnosticLog.Current.Error("tray.unavailable", "Continuing without a notification-area icon.", ex);
+            _trayIcon.Dispose();
+            _trayIcon = null;
+        }
 
         if (!launchedViaStartupTask) ShowWindow();
 

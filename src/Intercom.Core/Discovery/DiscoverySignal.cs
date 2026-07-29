@@ -1,5 +1,7 @@
 namespace Intercom.Discovery;
 
+using Intercom.Identity;
+
 /// <summary>
 /// A raw event delivered by <see cref="IDnsServiceDiscovery"/>'s browse
 /// callback, before any policy (TTL bookkeeping, dedup, merging across
@@ -33,6 +35,7 @@ public abstract class DiscoverySignal
     public sealed class Seen : DiscoverySignal
     {
         public required int ProtocolVersion { get; init; }
+        public SpkiPin? Spki { get; init; }
         public required PeerEndpoint Endpoint { get; init; }
 
         /// <summary>How long this sighting is valid for absent a refresh —

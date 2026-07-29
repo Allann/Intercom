@@ -20,7 +20,7 @@ public static class DiscoveryProtocol
     /// version this build doesn't understand is still shown as visible
     /// (discovery is presentation, not trust) but the app can choose to
     /// flag it as "unknown protocol" rather than assume compatibility.</summary>
-    public const int CurrentVersion = 1;
+    public const int CurrentVersion = 2;
 
     /// <summary>TXT key for <see cref="CurrentVersion"/>.</summary>
     public const string TxtKeyVersion = "v";
@@ -30,4 +30,5 @@ public static class DiscoveryProtocol
     /// hash or any certificate material). Discovery TXT records must never
     /// carry contact names, DND state, or activity data.</summary>
     public const string TxtKeyPeerIdHint = "id";
+    public const string TxtKeySpki = "spki";
 }

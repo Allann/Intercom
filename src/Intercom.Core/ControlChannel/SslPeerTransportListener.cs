@@ -3,6 +3,7 @@ using System.Net.Security;
 using System.Net.Sockets;
 using System.Security.Authentication;
 using System.Security.Cryptography.X509Certificates;
+using Intercom.Diagnostics;
 
 namespace Intercom.ControlChannel;
 
@@ -92,11 +93,12 @@ public sealed class SslPeerTransportListener : IPeerTransportListener
 
             ConnectionAccepted?.Invoke(new SslPeerConnection(sslStream));
         }
-        catch
+        catch (Exception ex)
         {
             // Handshake failure (no client cert offered, ALPN mismatch,
             // cancelled during shutdown, etc.): nothing to hand the caller —
             // this never surfaces as ConnectionAccepted. Just clean up.
+            DiagnosticLog.Current.Error("control-channel.inbound-tls-failed", "Inbound mutual-TLS handshake failed.", ex);
             if (sslStream is not null)
             {
                 await sslStream.DisposeAsync().ConfigureAwait(false);

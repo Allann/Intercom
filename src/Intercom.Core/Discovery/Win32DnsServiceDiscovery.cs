@@ -1,5 +1,7 @@
 using System.Net;
 using System.Runtime.InteropServices;
+using Intercom.Diagnostics;
+using Intercom.Identity;
 
 namespace Intercom.Discovery;
 
@@ -9,13 +11,11 @@ namespace Intercom.Discovery;
 /// (available since Windows 10; no managed wrapper exists in .NET, hence the
 /// P/Invoke below).
 ///
-/// This class cannot be exercised by an automated test: it requires a live
-/// Windows mDNS responder, real multicast traffic, and firewall-permitted UDP
-/// 5353 — none of which exist in this sandbox or a normal CI runner. It has
-/// been reviewed against the documented windns.h layout but has NOT been
-/// runtime-validated against a real peer; that validation is the two-PC
-/// hardware pass called out in prototypes/14-lan-resilience/README.md and
-/// docs/research/local-network-transport.md's required prototype list.
+/// tests/Intercom.Discovery.Integration exercises this class across two real
+/// processes on a Windows host and verifies bidirectional register/browse/
+/// resolve behavior. That harness cannot replace the two-PC firewall/network
+/// acceptance pass called out in prototypes/14-lan-resilience/README.md, but
+/// it does keep the native marshaling path under repeatable runtime coverage.
 ///
 /// DnsServiceBrowse only ever delivers PTR add/remove notifications for the
 /// service type — it does not resolve an instance's own SRV/TXT/address
@@ -43,7 +43,7 @@ public sealed class Win32DnsServiceDiscovery : IDnsServiceDiscovery
         var ipv4 = iface.UnicastAddresses.FirstOrDefault(a => a.AddressFamily == System.Net.Sockets.AddressFamily.InterNetwork);
         var ipv6 = iface.UnicastAddresses.FirstOrDefault(a => a.AddressFamily == System.Net.Sockets.AddressFamily.InterNetworkV6);
 
-        return new ServiceRegistration(instanceName, hostName, ipv4, ipv6, advertisement.Port, advertisement.PeerIdHint, interfaceIndex);
+        return new ServiceRegistration(instanceName, hostName, ipv4, ipv6, advertisement.Port, advertisement.PeerIdHint, advertisement.Spki, interfaceIndex);
     }
 
     public IDisposable Browse(LanInterface iface, Action<DiscoverySignal> onSignal)
@@ -70,6 +70,7 @@ public sealed class Win32DnsServiceDiscovery : IDnsServiceDiscovery
     const ushort DnsTypePtr = 12;
 
     const uint DnsQueryResultsFalse = 0;
+    const uint ErrorCancelled = 1223;
     const uint DnsRequestPending = 9506; // WSA_IO_PENDING-equivalent DNS_STATUS for a pending async request
     const int DnsFreeRecordList = 1; // DNS_FREE_TYPE.DnsFreeRecordList
 
@@ -123,23 +124,24 @@ public sealed class Win32DnsServiceDiscovery : IDnsServiceDiscovery
         int _expectedCompletions = 1; // register only, until Dispose() bumps this to 2
         int _completionsSeen;
 
-        public ServiceRegistration(string instanceName, string hostName, IPAddress? ipv4, IPAddress? ipv6, int port, PeerIdHint peerIdHint, int interfaceIndex)
+        public ServiceRegistration(string instanceName, string hostName, IPAddress? ipv4, IPAddress? ipv6, int port, PeerIdHint peerIdHint, SpkiPin? spki, int interfaceIndex)
         {
             _callback = OnCompletion;
             _selfHandle = GCHandle.Alloc(this);
+            var txt = new Dictionary<string, string>
+            {
+                [DiscoveryProtocol.TxtKeyVersion] = DiscoveryProtocol.CurrentVersion.ToString(),
+                [DiscoveryProtocol.TxtKeyPeerIdHint] = peerIdHint.Value,
+            };
+            if (spki is { } pin) txt[DiscoveryProtocol.TxtKeySpki] = pin.ToString();
+
             _instance = new NativeServiceInstance(
                 instanceName,
                 hostName,
                 ipv4,
                 ipv6,
                 (ushort)port,
-                new Dictionary<string, string>
-                {
-                    [DiscoveryProtocol.TxtKeyVersion] = DiscoveryProtocol.CurrentVersion.ToString(),
-                    // Non-secret only (ADR-0002): a random routing identifier,
-                    // never the SPKI hash or any certificate material.
-                    [DiscoveryProtocol.TxtKeyPeerIdHint] = peerIdHint.Value,
-                });
+                txt);
 
             _request = new DNS_SERVICE_REGISTER_REQUEST
             {
@@ -332,7 +334,7 @@ public sealed class Win32DnsServiceDiscovery : IDnsServiceDiscovery
                 // Fail closed for this one notification, never crash the
                 // native callback thread — an unparsed record is treated as
                 // "nothing observed", not as a peer.
-                System.Diagnostics.Debug.WriteLine($"Failed to parse DNS-SD browse record: {ex.Message}");
+                DiagnosticLog.Current.Error("discovery.browse-callback-failed", $"interface={_interfaceId}", ex);
             }
             finally
             {
@@ -383,7 +385,7 @@ public sealed class Win32DnsServiceDiscovery : IDnsServiceDiscovery
                     }
                     catch (Exception ex)
                     {
-                        System.Diagnostics.Debug.WriteLine($"DnsServiceResolve failed to start for '{instanceName}': {ex.Message}");
+                        DiagnosticLog.Current.Error("discovery.resolve-start-failed", $"instance={instanceName} interface={_interfaceId}", ex);
                     }
                 }
             }
@@ -422,7 +424,7 @@ public sealed class Win32DnsServiceDiscovery : IDnsServiceDiscovery
 
             if (removed is not null)
             {
-                _onSignal(new DiscoverySignal.Withdrawn
+                EmitSignal(new DiscoverySignal.Withdrawn
                 {
                     PeerIdHint = removed.Value.PeerIdHint,
                     InterfaceId = _interfaceId,
@@ -491,8 +493,8 @@ public sealed class Win32DnsServiceDiscovery : IDnsServiceDiscovery
             {
                 if (status != DnsQueryResultsFalse || pInstance == IntPtr.Zero)
                 {
-                    if (status != DnsQueryResultsFalse)
-                        System.Diagnostics.Debug.WriteLine($"DnsServiceResolve completion reported status {status} for '{instanceName}'.");
+                    if (status != DnsQueryResultsFalse && status != ErrorCancelled)
+                        DiagnosticLog.Current.Warning("discovery.resolve-status", $"status={status} instance={instanceName} interface={_interfaceId}");
                     return;
                 }
 
@@ -524,7 +526,7 @@ public sealed class Win32DnsServiceDiscovery : IDnsServiceDiscovery
             }
             catch (Exception ex)
             {
-                System.Diagnostics.Debug.WriteLine($"Failed to parse resolved DNS-SD instance '{instanceName}': {ex.Message}");
+                DiagnosticLog.Current.Error("discovery.resolve-callback-failed", $"instance={instanceName} interface={_interfaceId}", ex);
             }
 
             if (resolved is not null) EmitSeenSignals(resolved.Value, pending.Ttl);
@@ -544,12 +546,30 @@ public sealed class Win32DnsServiceDiscovery : IDnsServiceDiscovery
                 InterfaceId = _interfaceId,
                 ObservedAt = now,
                 ProtocolVersion = cached.ProtocolVersion,
+                Spki = cached.Spki,
                 Ttl = ttlSpan,
                 Endpoint = new PeerEndpoint { Address = address, Port = cached.Port, InterfaceId = _interfaceId },
             };
 
-            if (cached.Ipv4 is not null) _onSignal(BuildSeen(cached.Ipv4));
-            if (cached.Ipv6 is not null) _onSignal(BuildSeen(cached.Ipv6));
+            if (cached.Ipv4 is not null) EmitSignal(BuildSeen(cached.Ipv4));
+            if (cached.Ipv6 is not null) EmitSignal(BuildSeen(cached.Ipv6));
+        }
+
+        void EmitSignal(DiscoverySignal signal)
+        {
+            try
+            {
+                _onSignal(signal);
+            }
+            catch (Exception ex)
+            {
+                // Never let managed consumer code unwind through a Win32
+                // DNS callback. Preserve the exception and continue browsing.
+                DiagnosticLog.Current.Error(
+                    "discovery.signal-handler-failed",
+                    $"kind={signal.GetType().Name} peer={signal.PeerIdHint} interface={signal.InterfaceId}",
+                    ex);
+            }
         }
 
         public void Dispose()
@@ -687,7 +707,7 @@ public sealed class Win32DnsServiceDiscovery : IDnsServiceDiscovery
         }
     }
 
-    readonly record struct CachedInstance(PeerIdHint PeerIdHint, int ProtocolVersion, IPAddress? Ipv4, IPAddress? Ipv6, int Port);
+    readonly record struct CachedInstance(PeerIdHint PeerIdHint, int ProtocolVersion, SpkiPin? Spki, IPAddress? Ipv4, IPAddress? Ipv6, int Port);
 
     /// <summary>Reads the PTR add/remove notifications off a DNS_RECORD
     /// linked list delivered by a browse callback, and separately reads a
@@ -755,6 +775,7 @@ public sealed class Win32DnsServiceDiscovery : IDnsServiceDiscovery
             }
 
             string? hintValue = null;
+            SpkiPin? spki = null;
             var protocolVersion = 0;
             for (var i = 0; i < instance.dwPropertyCount; i++)
             {
@@ -765,12 +786,17 @@ public sealed class Win32DnsServiceDiscovery : IDnsServiceDiscovery
                 if (key is null) continue;
 
                 if (key == DiscoveryProtocol.TxtKeyPeerIdHint) hintValue = value;
+                else if (key == DiscoveryProtocol.TxtKeySpki && value is not null)
+                {
+                    try { spki = new SpkiPin(Convert.FromHexString(value)); }
+                    catch (Exception ex) when (ex is FormatException or ArgumentException) { return null; }
+                }
                 else if (key == DiscoveryProtocol.TxtKeyVersion && value is not null && int.TryParse(value, out var v)) protocolVersion = v;
             }
 
             if (string.IsNullOrWhiteSpace(hintValue)) return null;
 
-            return new CachedInstance(new PeerIdHint(hintValue), protocolVersion, ipv4, ipv6, instance.wPort);
+            return new CachedInstance(new PeerIdHint(hintValue), protocolVersion, spki, ipv4, ipv6, instance.wPort);
         }
     }
 

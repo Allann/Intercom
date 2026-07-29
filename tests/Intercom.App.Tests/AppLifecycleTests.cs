@@ -67,6 +67,19 @@ public class AppLifecycleTests : IDisposable
     }
 
     [Fact]
+    public void Start_TrayIconFailure_DoesNotPreventWindowOrLifecycleStartup()
+    {
+        var lifecycle = MakeLifecycle(out var window, out var trayIcon, out _, out _);
+        trayIcon.ThrowOnAdd = true;
+
+        var outcome = lifecycle.Start(launchedViaStartupTask: false);
+
+        Assert.True(window.ShownFromTrayCount >= 1);
+        Assert.True(trayIcon.Disposed);
+        Assert.False(outcome.IdentityWasRegenerated);
+    }
+
+    [Fact]
     public void Start_CalledTwice_Throws()
     {
         var lifecycle = MakeLifecycle(out _, out _, out _, out _);
@@ -202,11 +215,16 @@ public class AppLifecycleTests : IDisposable
 
     sealed class FakeTrayIcon : ITrayIcon
     {
+        public bool ThrowOnAdd { get; set; }
         public bool Added { get; private set; }
         public bool FocusSet { get; private set; }
         public bool Disposed { get; private set; }
 
-        public void Add(string tooltip) => Added = true;
+        public void Add(string tooltip)
+        {
+            if (ThrowOnAdd) throw new InvalidOperationException("shell refused icon");
+            Added = true;
+        }
         public void SetFocus() => FocusSet = true;
         public void Dispose() => Disposed = true;
     }

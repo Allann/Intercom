@@ -1,5 +1,7 @@
 namespace Intercom.Discovery;
 
+using Intercom.Identity;
+
 /// <summary>
 /// One entry in the "visible, unapproved" peer list (issue #20). This is
 /// discovery's entire output to the rest of the app: a peer being in this
@@ -12,6 +14,7 @@ public sealed record VisiblePeer
 {
     public required PeerIdHint PeerIdHint { get; init; }
     public required int ProtocolVersion { get; init; }
+    public SpkiPin? Spki { get; init; }
 
     /// <summary>All currently-live endpoints for this peer, merged across
     /// every interface it has been seen on (e.g. both Ethernet and Wi-Fi on

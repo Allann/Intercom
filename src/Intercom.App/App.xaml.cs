@@ -1,6 +1,7 @@
 using Microsoft.UI.Xaml;
 using Microsoft.Windows.AppLifecycle;
 using Microsoft.Windows.AppNotifications;
+using System.Runtime.InteropServices;
 using Intercom.Chat;
 using Intercom.ControlChannel;
 using Intercom.Diagnostics;
@@ -8,6 +9,7 @@ using Intercom.Discovery;
 using Intercom.Identity;
 using Intercom.Lifecycle;
 using Intercom.Presence;
+using Intercom.Pairing;
 using Intercom.Updates;
 using Intercom.App.AttentionCards;
 using Intercom.App.Presence;
@@ -33,6 +35,7 @@ public partial class App : Application
     readonly DndSettingsStore _dndSettings = new();
     readonly ChatTtsSettingsStore _chatTtsSettings = new();
     DiscoveryService? _discoveryService;
+    LanPairingHost? _pairingHost;
     PresenceEngine? _presenceEngine;
     SessionMessagePump? _sessionMessagePump;
     AttentionCardToastPresenter? _attentionCardToastPresenter;
@@ -45,7 +48,10 @@ public partial class App : Application
 
     public App()
     {
+        UnhandledException += (_, eventArgs) =>
+            DiagnosticLog.Current.Error("xaml.unhandled", eventArgs.Message, eventArgs.Exception);
         InitializeComponent();
+        DiagnosticLog.Current.Info("xaml.initialized", "Application resources initialized.");
 
         _lifecycle = new AppLifecycle(
             new CrashMarker(),
@@ -59,6 +65,7 @@ public partial class App : Application
 
     protected override void OnLaunched(LaunchActivatedEventArgs args)
     {
+        DiagnosticLog.Current.Info("launch.begin", $"activation={Program.InitialActivationArguments.Kind}");
         _uiDispatcherQueue = Microsoft.UI.Dispatching.DispatcherQueue.GetForCurrentThread();
 
         // Issue #25: registered as early as possible in OnLaunched, per
@@ -71,10 +78,28 @@ public partial class App : Application
         _attentionCardToastPresenter = new AttentionCardToastPresenter(_uiDispatcherQueue);
         _attentionCardToastPresenter.AcknowledgeRequested += OnToastAcknowledgeRequested;
         _attentionCardToastPresenter.OpenRequested += OnToastOpenRequested;
-        _attentionCardToastPresenter.Initialize();
+        try
+        {
+            _attentionCardToastPresenter.Initialize();
+            DiagnosticLog.Current.Info("notifications.registered", "Native app notifications registered.");
+        }
+        catch (Exception ex) when (ex is InvalidOperationException or COMException)
+        {
+            // Native app notifications are presentation-only. Some supported
+            // Windows configurations reject notification/COM registration;
+            // the intercom must still launch and retain its in-app attention
+            // card shelf instead of fail-fast crashing during OnLaunched.
+            System.Diagnostics.Debug.WriteLine($"App notification registration unavailable: {ex}");
+            DiagnosticLog.Current.Warning("notifications.unavailable", "Continuing without native app notifications.", ex);
+            _attentionCardToastPresenter.AcknowledgeRequested -= OnToastAcknowledgeRequested;
+            _attentionCardToastPresenter.OpenRequested -= OnToastOpenRequested;
+            _attentionCardToastPresenter.Dispose();
+            _attentionCardToastPresenter = null;
+        }
 
         var launchedViaStartupTask = Program.InitialActivationArguments.Kind == ExtendedActivationKind.StartupTask;
         var outcome = _lifecycle.Start(launchedViaStartupTask);
+        DiagnosticLog.Current.Info("lifecycle.started", $"startupTask={launchedViaStartupTask} identityRegenerated={outcome.IdentityWasRegenerated}");
 
         if (outcome.IdentityWasRegenerated)
         {
@@ -95,12 +120,16 @@ public partial class App : Application
         }
 
         _mainWindow?.AttachIdentityStore(_lifecycle.IdentityStore);
+        if (_mainWindow is not null) _mainWindow.PairingRequested += OnPairingRequested;
 
+        StartPairingHost();
         StartDiscovery();
+        DiagnosticLog.Current.Info("discovery.started", "LAN discovery startup completed.");
         StartPresence();
         StartChat();
         StartAttentionCards();
         StartUpdateCheck();
+        DiagnosticLog.Current.Info("launch.complete", "All startup modules initialized.");
 
         Program.RedirectedActivationReceived += OnRedirectedActivation;
 
@@ -112,7 +141,7 @@ public partial class App : Application
         if (activatedArgs.Kind == ExtendedActivationKind.AppNotification
             && activatedArgs.Data is AppNotificationActivatedEventArgs notificationArgs)
         {
-            _attentionCardToastPresenter.HandleActivation(notificationArgs);
+            _attentionCardToastPresenter?.HandleActivation(notificationArgs);
         }
     }
 
@@ -184,7 +213,8 @@ public partial class App : Application
     /// ticket is not group cards either way (#29/#30's job).</summary>
     void StartAttentionCards()
     {
-        _mainWindow?.AttachAttentionCards(_attentionCardToastPresenter!);
+        if (_attentionCardToastPresenter is not null)
+            _mainWindow?.AttachAttentionCards(_attentionCardToastPresenter);
     }
 
     /// <summary>Issue #31: fire-and-forget background check against the
@@ -229,10 +259,64 @@ public partial class App : Application
             new SystemNetworkInterfaceSnapshotProvider(),
             new SystemNetworkChangeNotifier(),
             PeerIdHint.FromPeerId(_lifecycle.Identity.PeerId),
-            PlaceholderControlChannelPort);
+            PlaceholderControlChannelPort,
+            localSpki: _lifecycle.Identity.SpkiSha256);
 
         _discoveryService.VisiblePeersChanged += OnVisiblePeersChanged;
         _discoveryService.Start();
+    }
+
+    void StartPairingHost()
+    {
+        _pairingHost = new LanPairingHost(
+            _lifecycle.IdentityStore,
+            PlaceholderControlChannelPort,
+            spki =>
+            {
+                var peer = _discoveryService?.VisiblePeers.FirstOrDefault(candidate => candidate.Spki is { } pin && pin == spki);
+                return peer is null || !Guid.TryParseExact(peer.PeerIdHint.Value, "N", out var id) ? null : id;
+            });
+        _pairingHost.PairingCodeReady += OnPairingCodeReady;
+        _pairingHost.Approved += OnPairingApproved;
+        _pairingHost.PairingFailed += OnPairingFailed;
+        _pairingHost.Start();
+        _mainWindow?.AttachPeerHost(_pairingHost);
+    }
+
+    void OnPairingRequested(VisiblePeer peer)
+    {
+        if (_pairingHost is null || peer.Spki is not { } spki) return;
+        if (!Guid.TryParseExact(peer.PeerIdHint.Value, "N", out var peerId)) return;
+        var endpoint = peer.Endpoints
+            .OrderBy(endpoint => endpoint.Address.AddressFamily == System.Net.Sockets.AddressFamily.InterNetwork ? 0 : 1)
+            .FirstOrDefault();
+        if (endpoint is null) return;
+
+        DiagnosticLog.Current.Info("ui.pairing-requested", $"peer={peerId} endpoint={endpoint.Address}:{endpoint.Port}");
+        _ = _pairingHost.ConnectAsync(
+            new System.Net.IPEndPoint(endpoint.Address, endpoint.Port),
+            peerId,
+            spki,
+            CancellationToken.None);
+    }
+
+    void OnPairingCodeReady(Guid peerId, string code) => _uiDispatcherQueue?.TryEnqueue(() =>
+        _mainWindow?.ShowPairingCode(
+            peerId,
+            code,
+            name => _pairingHost!.ConfirmAsync(peerId, name, CancellationToken.None),
+            () => _pairingHost!.RejectAsync(peerId, CancellationToken.None)));
+
+    void OnPairingApproved(ApprovedPeer peer) => _uiDispatcherQueue?.TryEnqueue(() =>
+    {
+        OnVisiblePeersChanged();
+        _mainWindow?.ShowPairingApproved(peer.FriendlyName);
+    });
+
+    void OnPairingFailed(Guid peerId, Exception ex)
+    {
+        DiagnosticLog.Current.Error("ui.pairing-failed", $"peer={peerId}", ex);
+        _uiDispatcherQueue?.TryEnqueue(() => _mainWindow?.ShowPairingFailed(ex.Message));
     }
 
     void OnVisiblePeersChanged()
@@ -241,7 +325,23 @@ public partial class App : Application
         // must be marshaled back onto the UI dispatcher.
         var peers = _discoveryService?.VisiblePeers;
         if (peers is null) return;
+        ReconnectApprovedPeers(peers);
         _uiDispatcherQueue?.TryEnqueue(() => _mainWindow?.UpdateDiscoveredPeers(peers));
+    }
+
+    void ReconnectApprovedPeers(IReadOnlyList<VisiblePeer> visiblePeers)
+    {
+        if (_pairingHost is null) return;
+        foreach (var approved in _lifecycle.IdentityStore.ApprovedPeers.Where(peer => !peer.Revoked && peer.SpkiSha256 is not null))
+        {
+            var visible = visiblePeers.FirstOrDefault(peer => peer.Spki is { } spki && spki == approved.SpkiSha256!.Value);
+            var endpoint = visible?.Endpoints
+                .OrderBy(item => item.Address.AddressFamily == System.Net.Sockets.AddressFamily.InterNetwork ? 0 : 1)
+                .FirstOrDefault();
+            if (endpoint is null) continue;
+            _ = _pairingHost.ConnectApprovedAsync(
+                new System.Net.IPEndPoint(endpoint.Address, endpoint.Port), approved, CancellationToken.None);
+        }
     }
 
     void OnRedirectedActivation(AppActivationArguments args)
@@ -249,13 +349,21 @@ public partial class App : Application
         _uiDispatcherQueue?.TryEnqueue(_lifecycle.ShowWindow);
     }
 
-    void OnQuitRequested()
+    async void OnQuitRequested()
     {
         Program.RedirectedActivationReceived -= OnRedirectedActivation;
         if (_discoveryService is not null)
         {
             _discoveryService.VisiblePeersChanged -= OnVisiblePeersChanged;
             _discoveryService.Dispose();
+        }
+        if (_mainWindow is not null) _mainWindow.PairingRequested -= OnPairingRequested;
+        if (_pairingHost is not null)
+        {
+            _pairingHost.PairingCodeReady -= OnPairingCodeReady;
+            _pairingHost.Approved -= OnPairingApproved;
+            _pairingHost.PairingFailed -= OnPairingFailed;
+            await _pairingHost.DisposeAsync();
         }
         _sessionMessagePump?.Dispose();
         _presenceEngine?.Dispose();
