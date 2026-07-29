@@ -18,13 +18,9 @@ namespace Intercom.Presence;
 /// <see cref="Attach"/> can be called once per live
 /// <see cref="PeerControlChannel"/> in the app's connection roster.
 ///
-/// No live multi-peer connection roster exists in this app shell yet
-/// (App.xaml.cs's <c>StartPresence</c> doc comment explains why in detail) —
-/// this class is real, tested glue, exercised in tests against real
-/// <see cref="PeerControlChannel"/>/fake transport pairs, not wired into
-/// App.xaml.cs today. Wiring it in, once a live connection roster exists, is
-/// exactly the same small mechanical addition StartPresence's doc comment
-/// already describes for the SEND side.
+/// The app composition also feeds frames from its live LAN peer host through
+/// <see cref="HandleInboundFrame"/>, keeping decoding independent of the
+/// concrete roster implementation.
 /// </summary>
 public sealed class PresenceReceiverService
 {

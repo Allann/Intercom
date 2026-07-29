@@ -9,12 +9,14 @@ using Windows.UI;
 using WinRT.Interop;
 using Intercom.AttentionCards;
 using Intercom.Chat;
+using Intercom.Contacts;
 using Intercom.Diagnostics;
 using Intercom.Discovery;
 using Intercom.Identity;
 using Intercom.Lifecycle;
 using Intercom.Presence;
 using Intercom.Pairing;
+using Intercom.Routing;
 using Intercom.Updates;
 using Intercom.App.AttentionCards;
 using Intercom.App.Chat;
@@ -58,12 +60,17 @@ public sealed partial class MainWindow : Window, IResidentWindow
     ChatTtsSettingsStore? _chatTtsSettings;
     ChatSpeechService? _chatSpeechService;
     readonly Dictionary<Guid, ChatService> _chatServices = [];
+    readonly Dictionary<Guid, IAttentionCardTransport> _attentionCardTransports = [];
+    readonly Dictionary<Guid, AttentionCardFanoutRouter> _attentionCardRouters = [];
 
     // ---- Issue #25: attention cards ----
     const string CustomComposerPresetLabel = "Custom…";
 
     readonly Dictionary<Guid, AttentionCardService> _attentionCardServices = [];
     LanPairingHost? _peerHost;
+    ContactStore? _contactStore;
+    ManualOverrideStore? _manualOverrideStore;
+    PresenceReceiver? _presenceReceiver;
     Guid? _selectedChatPeerId;
     Guid? _selectedAttentionPeerId;
     AttentionCardToastPresenter? _attentionCardToastPresenter;
@@ -394,6 +401,13 @@ public sealed partial class MainWindow : Window, IResidentWindow
         RenderDndSign();
     }
 
+    public void AttachRouting(ContactStore contactStore, ManualOverrideStore manualOverrideStore, PresenceReceiver presenceReceiver)
+    {
+        _contactStore = contactStore;
+        _manualOverrideStore = manualOverrideStore;
+        _presenceReceiver = presenceReceiver;
+    }
+
     void OnToggleDndClick(object sender, RoutedEventArgs e) => _dndSettings?.Toggle();
 
     void RenderDndSign()
@@ -449,11 +463,14 @@ public sealed partial class MainWindow : Window, IResidentWindow
                 chat.Conversation.MessageUpdated += _ => _dispatcherQueue.TryEnqueue(RenderChatMessages);
                 _chatServices[peer.PeerId] = chat;
 
-                var cards = new AttentionCardService(_peerHost.CreateAttentionCardTransport(peer.PeerId));
+                var cardTransport = _peerHost.CreateAttentionCardTransport(peer.PeerId);
+                var cards = new AttentionCardService(cardTransport);
                 cards.CardReceived += card => OnIncomingAttentionCard(peer.PeerId, card);
                 cards.Conversation.CardAdded += _ => _dispatcherQueue.TryEnqueue(RenderAttentionCardShelf);
                 cards.Conversation.CardUpdated += _ => _dispatcherQueue.TryEnqueue(RenderAttentionCardShelf);
                 _attentionCardServices[peer.PeerId] = cards;
+                _attentionCardTransports[peer.PeerId] = cardTransport;
+                _attentionCardRouters.Clear();
             }
         }
         var choices = peers.Select(peer => new PeerChoice(peer.PeerId, peer.FriendlyName,
@@ -551,7 +568,25 @@ public sealed partial class MainWindow : Window, IResidentWindow
         ChatInputBox.Text = "";
         try
         {
-            await chatService.SendAsync(text, CancellationToken.None);
+            var contact = FindContactForPeer(peerId);
+            if (contact is null || _presenceReceiver is null || _manualOverrideStore is null)
+            {
+                await chatService.SendAsync(text, CancellationToken.None);
+            }
+            else
+            {
+                var endpoints = contact.MemberPeerIds
+                    .Where(_chatServices.ContainsKey)
+                    .ToDictionary(id => id, id => new ChatDeviceEndpoint { DeviceId = id, Service = _chatServices[id] });
+                var router = new ChatFanoutRouter(
+                    endpoints,
+                    () => _manualOverrideStore.Get(contact.ContactId),
+                    () => _manualOverrideStore.Clear(contact.ContactId));
+                await router.SendAsync(
+                    _presenceReceiver.LiveDevices(contact.MemberPeerIds, DateTimeOffset.UtcNow),
+                    text,
+                    CancellationToken.None);
+            }
         }
         catch
         {
@@ -805,7 +840,20 @@ public sealed partial class MainWindow : Window, IResidentWindow
 
         try
         {
-            await cardService.SendAsync(purpose, _selectedComposerIcon, CancellationToken.None);
+            var contact = FindContactForPeer(peerId);
+            if (contact is null || _presenceReceiver is null || _manualOverrideStore is null)
+            {
+                await cardService.SendAsync(purpose, _selectedComposerIcon, CancellationToken.None);
+            }
+            else
+            {
+                var router = GetAttentionCardRouter(contact);
+                await router.SendAsync(
+                    _presenceReceiver.LiveDevices(contact.MemberPeerIds, DateTimeOffset.UtcNow),
+                    purpose,
+                    _selectedComposerIcon,
+                    CancellationToken.None);
+            }
         }
         catch
         {
@@ -815,6 +863,29 @@ public sealed partial class MainWindow : Window, IResidentWindow
         }
 
         if (isCustom) ComposerCustomTextBox.Text = "";
+    }
+
+    Contact? FindContactForPeer(Guid peerId) =>
+        _contactStore?.Contacts.FirstOrDefault(contact => contact.MemberPeerIds.Contains(peerId));
+
+    AttentionCardFanoutRouter GetAttentionCardRouter(Contact contact)
+    {
+        if (_attentionCardRouters.TryGetValue(contact.ContactId, out var existing)) return existing;
+
+        var endpoints = contact.MemberPeerIds
+            .Where(id => _attentionCardServices.ContainsKey(id) && _attentionCardTransports.ContainsKey(id))
+            .ToDictionary(id => id, id => new AttentionCardDeviceEndpoint
+            {
+                DeviceId = id,
+                Service = _attentionCardServices[id],
+                Transport = _attentionCardTransports[id],
+            });
+        var router = new AttentionCardFanoutRouter(
+            endpoints,
+            () => _manualOverrideStore!.Get(contact.ContactId),
+            () => _manualOverrideStore!.Clear(contact.ContactId));
+        _attentionCardRouters[contact.ContactId] = router;
+        return router;
     }
 
     void RenderAttentionCardShelf()

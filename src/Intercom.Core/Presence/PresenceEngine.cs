@@ -155,7 +155,7 @@ public sealed class PresenceEngine : IDisposable
         return new PresenceLease
         {
             DeviceId = _deviceId,
-            ContactId = _deviceId, // see PresenceLease's remarks — #30 placeholder
+            ContactId = _deviceId, // grouping is local-only; see PresenceLease
             IncarnationId = _incarnationId,
             Sequence = (ulong)Interlocked.Increment(ref _sequence),
             Availability = availability,

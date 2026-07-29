@@ -3,6 +3,7 @@ using Microsoft.Windows.AppLifecycle;
 using Microsoft.Windows.AppNotifications;
 using System.Runtime.InteropServices;
 using Intercom.Chat;
+using Intercom.Contacts;
 using Intercom.ControlChannel;
 using Intercom.Diagnostics;
 using Intercom.Discovery;
@@ -10,6 +11,7 @@ using Intercom.Identity;
 using Intercom.Lifecycle;
 using Intercom.Presence;
 using Intercom.Pairing;
+using Intercom.Routing;
 using Intercom.Updates;
 using Intercom.App.AttentionCards;
 using Intercom.App.Presence;
@@ -34,9 +36,13 @@ public partial class App : Application
     readonly AppLifecycle _lifecycle;
     readonly DndSettingsStore _dndSettings = new();
     readonly ChatTtsSettingsStore _chatTtsSettings = new();
+    readonly ContactStore _contactStore = new();
+    readonly ManualOverrideStore _manualOverrideStore = new();
     DiscoveryService? _discoveryService;
     LanPairingHost? _pairingHost;
     PresenceEngine? _presenceEngine;
+    PresenceReceiverService? _presenceReceiverService;
+    Timer? _presenceBroadcastTimer;
     SessionMessagePump? _sessionMessagePump;
     AttentionCardToastPresenter? _attentionCardToastPresenter;
     readonly UpdateChecker _updateChecker = new(
@@ -145,20 +151,9 @@ public partial class App : Application
         }
     }
 
-    /// <summary>Issue #23: local availability + DND state, and the Win32
-    /// session/power/shutdown signals that drive it. Deliberately does NOT
-    /// yet broadcast presence to any live peer — there is no live,
-    /// multi-peer <see cref="PeerControlChannel"/> roster in this app shell
-    /// today (control-channel connection routing was explicitly deferred by
-    /// issue #21's own scope note — see PeerControlChannel's class doc —
-    /// and #23 depends only on #21, not on that routing infrastructure
-    /// existing). <see cref="PeerControlChannel"/> already has the send-side
-    /// hook fully implemented and tested (see PeerControlChannelTests); once
-    /// a connection-routing/roster ticket exists, wiring
-    /// <c>_presenceEngine.NextLease</c> in as each channel's
-    /// presenceLeaseProvider, and <c>_presenceEngine.MeaningfulStateChanged</c>
-    /// to call <c>NotifyPresenceChanged()</c> across that roster, is a
-    /// small, mechanical addition — not a redesign.</summary>
+    /// <summary>Local availability + DND state and the Win32 signals that
+    /// drive it. Issue #35 wires both directions to the live approved-peer
+    /// roster: periodic/immediate broadcasts and inbound lease decoding.</summary>
     void StartPresence()
     {
         _dndSettings.Load();
@@ -167,10 +162,17 @@ public partial class App : Application
             deviceId: _lifecycle.Identity.PeerId,
             idleTimeProvider: new Win32IdleTimeProvider(),
             dndSettings: _dndSettings,
-            // No feature capability is actually implemented yet (#24 text,
-            // #29 voice) — reflect that honestly rather than advertising
-            // something this build can't do.
-            capabilities: Capability.None);
+            capabilities: Capability.Text | Capability.Tts | Capability.SpokenChat | Capability.AttentionCards);
+
+        _presenceReceiverService = new PresenceReceiverService();
+        _contactStore.Load();
+        _manualOverrideStore.Load();
+        if (_pairingHost is not null)
+        {
+            _pairingHost.ApplicationFrameReceived += OnPeerApplicationFrameReceived;
+            _pairingHost.ConnectionsChanged += OnPeerConnectionsChanged;
+        }
+        _presenceEngine.MeaningfulStateChanged += BroadcastPresence;
 
         if (_mainWindow is not null)
         {
@@ -183,9 +185,28 @@ public partial class App : Application
             _sessionMessagePump.EndingSession += _presenceEngine.OnQueryEndSession;
 
             _mainWindow.AttachPresence(_dndSettings);
+            _mainWindow.AttachRouting(_contactStore, _manualOverrideStore, _presenceReceiverService.Receiver);
         }
 
         _presenceEngine.Start();
+        _presenceBroadcastTimer = new Timer(
+            _ => BroadcastPresence(),
+            null,
+            TimeSpan.Zero,
+            TimeSpan.FromSeconds(10));
+    }
+
+    void OnPeerApplicationFrameReceived(Guid peerId, ControlFrame frame) =>
+        _presenceReceiverService?.HandleInboundFrame(frame);
+
+    void OnPeerConnectionsChanged() => BroadcastPresence();
+
+    void BroadcastPresence()
+    {
+        if (_pairingHost is null || _presenceEngine is null) return;
+        _ = _pairingHost.BroadcastAsync(
+            () => _presenceEngine.NextLease().ToFrame(Guid.NewGuid()),
+            CancellationToken.None);
     }
 
     /// <summary>Issue #24: loads the real, persisted per-peer spoken-chat
@@ -366,6 +387,13 @@ public partial class App : Application
             await _pairingHost.DisposeAsync();
         }
         _sessionMessagePump?.Dispose();
+        _presenceBroadcastTimer?.Dispose();
+        if (_presenceEngine is not null) _presenceEngine.MeaningfulStateChanged -= BroadcastPresence;
+        if (_pairingHost is not null)
+        {
+            _pairingHost.ApplicationFrameReceived -= OnPeerApplicationFrameReceived;
+            _pairingHost.ConnectionsChanged -= OnPeerConnectionsChanged;
+        }
         _presenceEngine?.Dispose();
         _attentionCardToastPresenter?.Dispose();
         _lifecycle.Quit();

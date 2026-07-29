@@ -4,6 +4,8 @@ using Intercom.Identity;
 using Intercom.Pairing;
 using Intercom.Chat;
 using Intercom.AttentionCards;
+using Intercom.ControlChannel;
+using Intercom.Presence;
 using Xunit;
 
 namespace Intercom.App.Tests.Pairing;
@@ -93,6 +95,51 @@ public sealed class LanPairingHostTests : IDisposable
         await bCards.AcknowledgeAsync(receivedCard.MessageId, CancellationToken.None);
         await WaitUntilAsync(() => aCards.Conversation.Cards
             .Single(card => card.MessageId == sentCard.MessageId).AckState == AttentionCardAckState.Acknowledged);
+    }
+
+    [Fact]
+    public async Task ApprovedPeers_BroadcastPresenceToEveryConnectedPeer()
+    {
+        var aStore = Store("presence-a");
+        var bStore = Store("presence-b");
+        aStore.Approve(Peer(bStore, "PC B"));
+        bStore.Approve(Peer(aStore, "PC A"));
+        var port = FreePort();
+
+        await using var a = new LanPairingHost(aStore, port, _ => null);
+        await using var b = new LanPairingHost(bStore, port + 1, _ => null);
+        a.Start();
+        b.Start();
+
+        await a.ConnectApprovedAsync(
+            new IPEndPoint(IPAddress.Loopback, port + 1),
+            aStore.ApprovedPeers[0],
+            CancellationToken.None);
+        await WaitUntilAsync(() => a.ConnectedPeerIds.Contains(bStore.Identity.PeerId));
+
+        var received = new TaskCompletionSource<PresenceLease>(TaskCreationOptions.RunContinuationsAsynchronously);
+        b.ApplicationFrameReceived += (_, frame) =>
+        {
+            if (frame.Type == ControlMessageType.Presence)
+                received.TrySetResult(PresenceFrameCodec.Decode(frame));
+        };
+
+        await a.BroadcastAsync(() => new PresenceLease
+        {
+            DeviceId = aStore.Identity.PeerId,
+            ContactId = aStore.Identity.PeerId,
+            IncarnationId = Guid.NewGuid(),
+            Sequence = 1,
+            Availability = AvailabilityState.Available,
+            Dnd = false,
+            IdleAgeBucket = IdleAgeBucket.UnderTwoMinutes,
+            LeaseSeconds = 30,
+            Capabilities = Capability.Text | Capability.AttentionCards,
+        }.ToFrame(Guid.NewGuid()), CancellationToken.None);
+
+        var lease = await received.Task.WaitAsync(TimeSpan.FromSeconds(5));
+        Assert.Equal(aStore.Identity.PeerId, lease.DeviceId);
+        Assert.Equal(Capability.Text | Capability.AttentionCards, lease.Capabilities);
     }
 
     IdentityStore Store(string name)

@@ -17,9 +17,8 @@ namespace Intercom.Presence;
 /// SENDING side at all yet (#30 hasn't been built). For #23, ContactId is
 /// populated with this device's own <see cref="DeviceId"/> as a
 /// self-identifying placeholder — effectively "this device is its own
-/// contact" — until #30 defines real multi-device-per-contact association.
-/// This is a deliberate, documented scoping call; reviewers should double
-/// check it against #30 when that ticket is picked up.
+/// contact". Issue #30 confirmed that receivers must ignore this value for
+/// grouping and use their own local <c>ContactStore</c> membership instead.
 /// </summary>
 public sealed record PresenceLease
 {

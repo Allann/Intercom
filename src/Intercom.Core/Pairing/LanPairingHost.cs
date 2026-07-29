@@ -29,7 +29,7 @@ public sealed class LanPairingHost : IAsyncDisposable
     public event Action<ApprovedPeer>? Approved;
     public event Action<Guid, Exception>? PairingFailed;
     public event Action? ConnectionsChanged;
-    internal event Action<Guid, ControlFrame>? ApplicationFrameReceived;
+    public event Action<Guid, ControlFrame>? ApplicationFrameReceived;
     internal event Action<Guid, Guid>? DeliveryConfirmed;
     internal event Action<Guid>? ConnectionDropped;
 
@@ -250,7 +250,7 @@ public sealed class LanPairingHost : IAsyncDisposable
         ConnectionsChanged?.Invoke();
     }
 
-    internal Task SendAsync(Guid peerId, ControlFrame frame, CancellationToken cancellationToken)
+    public Task SendAsync(Guid peerId, ControlFrame frame, CancellationToken cancellationToken)
     {
         TlsPairingTransport transport;
         lock (_gate)
@@ -259,6 +259,29 @@ public sealed class LanPairingHost : IAsyncDisposable
                 throw new InvalidOperationException("That family member is offline.");
         }
         return transport.SendAsync(frame, cancellationToken);
+    }
+
+    /// <summary>Sends the same application frame to every currently connected
+    /// approved peer. Each peer receives its own frame instance/message ID so
+    /// Delivered receipts remain unambiguous per connection.</summary>
+    public async Task BroadcastAsync(Func<ControlFrame> createFrame, CancellationToken cancellationToken)
+    {
+        ArgumentNullException.ThrowIfNull(createFrame);
+        Guid[] peers;
+        lock (_gate) { peers = _connections.Keys.ToArray(); }
+
+        foreach (var peerId in peers)
+        {
+            try
+            {
+                await SendAsync(peerId, createFrame(), cancellationToken).ConfigureAwait(false);
+            }
+            catch (Exception) when (!cancellationToken.IsCancellationRequested)
+            {
+                // A peer can disconnect between the roster snapshot and send.
+                // Presence is a lease and the next successful broadcast repairs it.
+            }
+        }
     }
 
     public IChatTransport CreateChatTransport(Guid peerId) => new LanPeerChatTransport(this, peerId);
