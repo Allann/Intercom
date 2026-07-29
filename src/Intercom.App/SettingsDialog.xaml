@@ -1,0 +1,13 @@
+<ContentDialog
+    x:Class="Intercom.App.SettingsDialog"
+    xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+    xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+    Title="Settings"
+    CloseButtonText="Done">
+    <StackPanel Spacing="14" MinWidth="420">
+        <TextBlock Text="AUDIO DEVICES" FontSize="12" FontWeight="Bold" Foreground="#FFB6502F"/>
+        <TextBlock Text="Intercom uses the default communications devices selected in Windows. Changes apply to the next voice connection." TextWrapping="Wrap" Opacity="0.75"/>
+        <Button Content="Open microphone settings" HorizontalAlignment="Stretch" Click="OnOpenMicrophoneSettingsClick"/>
+        <Button Content="Open speaker settings" HorizontalAlignment="Stretch" Click="OnOpenSpeakerSettingsClick"/>
+    </StackPanel>
+</ContentDialog>

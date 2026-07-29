@@ -23,7 +23,7 @@
                 </Style>
             </Grid.Resources>
 
-            <StackPanel Spacing="12" MaxWidth="1100" HorizontalAlignment="Center">
+            <StackPanel Spacing="12" HorizontalAlignment="Stretch">
                 <InfoBar x:Name="CrashNotice" Title="Intercom closed unexpectedly last time" Message="Your settings are safe. Intercom has restarted and is available again." Severity="Warning" IsOpen="False" IsClosable="True"/>
                 <InfoBar x:Name="IncomingAttentionNotice" Title="Attention card received" Severity="Informational" IsOpen="False" IsClosable="True"/>
                 <InfoBar x:Name="UpdateNotice" Title="An update is available" Severity="Informational" IsOpen="False" IsClosable="True" CloseButtonClick="OnUpdateNoticeCloseButtonClick">
@@ -34,14 +34,60 @@
                     <Border Background="#FF2B1D14" CornerRadius="16"><Border.RenderTransform><TranslateTransform X="8" Y="8"/></Border.RenderTransform></Border>
                     <Border Background="#FFFBF4E4" BorderBrush="#FF2B1D14" BorderThickness="4" CornerRadius="16" Padding="20">
                         <StackPanel Spacing="16">
-                            <TextBlock Text="📻 Intercom" FontSize="20" FontWeight="Bold" Foreground="#FF2B1D14"/>
+                            <Grid>
+                                <TextBlock Text="📻 Intercom" FontSize="20" FontWeight="Bold" Foreground="#FF2B1D14" VerticalAlignment="Center"/>
+                                <Button x:Name="SettingsButton" Content="⚙ Settings" Style="{StaticResource SmallComicButtonStyle}" HorizontalAlignment="Right" Click="OnSettingsClick"/>
+                            </Grid>
 
-                            <Grid ColumnSpacing="16">
+                            <Grid x:Name="MainRegionsGrid" ColumnSpacing="16" RowSpacing="14">
                                 <Grid.ColumnDefinitions>
-                                    <ColumnDefinition Width="210"/><ColumnDefinition Width="*" MinWidth="400"/><ColumnDefinition Width="250"/>
+                                    <ColumnDefinition x:Name="FamilyColumn" Width="210"/>
+                                    <ColumnDefinition x:Name="VoiceColumn" Width="480"/>
+                                    <ColumnDefinition x:Name="ChatColumn" Width="*"/>
                                 </Grid.ColumnDefinitions>
+                                <Grid.RowDefinitions>
+                                    <RowDefinition x:Name="PrimaryRegionsRow" Height="Auto"/>
+                                    <RowDefinition x:Name="SecondaryRegionsRow" Height="0"/>
+                                    <RowDefinition x:Name="TertiaryRegionsRow" Height="0"/>
+                                </Grid.RowDefinitions>
+                                <VisualStateManager.VisualStateGroups>
+                                    <VisualStateGroup>
+                                        <VisualState x:Name="WideLayout">
+                                            <VisualState.StateTriggers><AdaptiveTrigger MinWindowWidth="1050"/></VisualState.StateTriggers>
+                                        </VisualState>
+                                        <VisualState x:Name="MediumLayout">
+                                            <VisualState.StateTriggers><AdaptiveTrigger MinWindowWidth="840"/></VisualState.StateTriggers>
+                                            <VisualState.Setters>
+                                                <Setter Target="ChatPanel.(Grid.Row)" Value="1"/>
+                                                <Setter Target="ChatPanel.(Grid.Column)" Value="0"/>
+                                                <Setter Target="ChatPanel.(Grid.ColumnSpan)" Value="3"/>
+                                                <Setter Target="ChatPanel.MinHeight" Value="360"/>
+                                                <Setter Target="ChatColumn.Width" Value="0"/>
+                                                <Setter Target="SecondaryRegionsRow.Height" Value="Auto"/>
+                                            </VisualState.Setters>
+                                        </VisualState>
+                                        <VisualState x:Name="NarrowLayout">
+                                            <VisualState.StateTriggers><AdaptiveTrigger MinWindowWidth="0"/></VisualState.StateTriggers>
+                                            <VisualState.Setters>
+                                                <Setter Target="FamilyPanel.(Grid.ColumnSpan)" Value="3"/>
+                                                <Setter Target="VoicePanel.(Grid.Row)" Value="1"/>
+                                                <Setter Target="VoicePanel.(Grid.Column)" Value="0"/>
+                                                <Setter Target="VoicePanel.(Grid.ColumnSpan)" Value="3"/>
+                                                <Setter Target="ChatPanel.(Grid.Row)" Value="2"/>
+                                                <Setter Target="ChatPanel.(Grid.Column)" Value="0"/>
+                                                <Setter Target="ChatPanel.(Grid.ColumnSpan)" Value="3"/>
+                                                <Setter Target="ChatPanel.MinHeight" Value="360"/>
+                                                <Setter Target="FamilyColumn.Width" Value="*"/>
+                                                <Setter Target="VoiceColumn.Width" Value="0"/>
+                                                <Setter Target="ChatColumn.Width" Value="0"/>
+                                                <Setter Target="SecondaryRegionsRow.Height" Value="Auto"/>
+                                                <Setter Target="TertiaryRegionsRow.Height" Value="Auto"/>
+                                            </VisualState.Setters>
+                                        </VisualState>
+                                    </VisualStateGroup>
+                                </VisualStateManager.VisualStateGroups>
 
-                                <Border Grid.Column="0" Style="{StaticResource PanelStyle}" Background="#FFF4E8CE" VerticalAlignment="Stretch">
+                                <Border x:Name="FamilyPanel" Grid.Column="0" Style="{StaticResource PanelStyle}" Background="#FFF4E8CE" VerticalAlignment="Stretch">
                                     <StackPanel Spacing="8">
                                         <TextBlock Text="FAMILY" Style="{StaticResource SectionHeaderStyle}"/>
                                         <TextBlock x:Name="SelectedFamilyText" Text="Select who you want to reach" FontSize="10" Opacity="0.72" TextWrapping="Wrap"/>
@@ -51,7 +97,7 @@
                                     </StackPanel>
                                 </Border>
 
-                                <StackPanel Grid.Column="1" Spacing="14">
+                                <StackPanel x:Name="VoicePanel" Grid.Column="1" Spacing="14">
                                     <Border Style="{StaticResource PanelStyle}" Background="#FFFFF8E8">
                                         <StackPanel Spacing="10">
                                             <TextBlock Text="GROUP FLOOR" Style="{StaticResource SectionHeaderStyle}"/>
@@ -73,7 +119,7 @@
                                             <TextBlock Text="HANDS-FREE" Style="{StaticResource SectionHeaderStyle}"/>
                                             <StackPanel Orientation="Horizontal" Spacing="8">
                                                 <ComboBox x:Name="HandsFreeRecipientCombo" Visibility="Collapsed" Width="210" PlaceholderText="Choose a family member" SelectionChanged="OnHandsFreeRecipientChanged"/>
-                                                <Button x:Name="HandsFreeButton" Content="Hands-Free later" IsEnabled="False" Style="{StaticResource SmallComicButtonStyle}" Background="#FF5C8A52" Foreground="#FFFBF4E4" Click="OnHandsFreeClick"/>
+                                                <Button x:Name="HandsFreeButton" Content="Start Hands-Free" IsEnabled="False" Style="{StaticResource SmallComicButtonStyle}" Background="#FF5C8A52" Foreground="#FFFBF4E4" Click="OnHandsFreeClick"/>
                                             </StackPanel>
                                             <TextBlock x:Name="HandsFreeStatusText" Text="Select an online family member from the Family list." FontSize="11" Opacity="0.7"/>
                                         </StackPanel>
@@ -86,10 +132,6 @@
                                             <StackPanel Grid.Column="1" Spacing="8" VerticalAlignment="Center">
                                                 <TextBlock x:Name="PushToTalkHint" Text="Enabled when you hold the group floor or a hands-free session." FontSize="11" Opacity="0.75" TextWrapping="Wrap"/>
                                                 <Button x:Name="TestSpeakerButton" Content="Test selected speaker" IsEnabled="False" HorizontalAlignment="Left" Click="OnTestSpeakerClick"/>
-                                                <TextBlock Text="Audio devices" FontSize="10" FontWeight="Bold"/>
-                                                <ComboBox x:Name="AudioInputCombo" Header="Microphone" PlaceholderText="Windows communications default" SelectionChanged="OnAudioDeviceSelectionChanged"/>
-                                                <ComboBox x:Name="AudioOutputCombo" Header="Speaker" PlaceholderText="Windows communications default" SelectionChanged="OnAudioDeviceSelectionChanged"/>
-                                                <TextBlock x:Name="AudioDiagnosticsText" Text="Audio session not initialized." FontSize="10" Opacity="0.72" TextWrapping="Wrap"/>
                                                 <Button x:Name="DndSignButton" Content="Available" Style="{StaticResource SmallComicButtonStyle}" HorizontalAlignment="Left" Click="OnToggleDndClick"/>
                                                 <StackPanel Orientation="Horizontal" Spacing="8">
                                                     <TextBlock Text="● available" FontSize="10" Foreground="#FF5C8A52"/><TextBlock Text="● talking" FontSize="10" Foreground="#FFE8A33D"/><TextBlock Text="● DND" FontSize="10" Foreground="#FFC1443A"/>
@@ -99,23 +141,44 @@
                                     </Border>
                                 </StackPanel>
 
-                                <Border Grid.Column="2" Style="{StaticResource PanelStyle}" Background="#FFF4E8CE" VerticalAlignment="Stretch">
-                                    <StackPanel Spacing="8">
-                                        <TextBlock Text="CHAT" Style="{StaticResource SectionHeaderStyle}"/>
-                                        <ComboBox x:Name="ChatRecipientCombo" Visibility="Collapsed" PlaceholderText="Choose a family member" SelectionChanged="OnChatRecipientChanged"/>
-                                        <CheckBox x:Name="SpokenChatCheckBox" Content="Read incoming messages aloud" Checked="OnSpokenChatToggled" Unchecked="OnSpokenChatToggled"/>
-                                        <TextBlock x:Name="ChatChimeNotice" Text="🔔 New message" FontSize="11" FontWeight="Bold" Foreground="#FFB6502F" Visibility="Collapsed"/>
-                                        <ScrollViewer x:Name="ChatScrollViewer" MinHeight="250" MaxHeight="420"><StackPanel x:Name="ChatMessagesPanel" Spacing="6"/></ScrollViewer>
-                                        <Grid ColumnSpacing="6"><Grid.ColumnDefinitions><ColumnDefinition Width="*"/><ColumnDefinition Width="Auto"/></Grid.ColumnDefinitions>
+                                <Border x:Name="ChatPanel" Grid.Column="2" Style="{StaticResource PanelStyle}" Background="#FFF4E8CE" VerticalAlignment="Stretch" MinWidth="220">
+                                    <Grid x:Name="ChatLayoutGrid" RowSpacing="8">
+                                        <Grid.RowDefinitions><RowDefinition Height="Auto"/><RowDefinition Height="Auto"/><RowDefinition Height="Auto"/><RowDefinition Height="*"/><RowDefinition Height="Auto"/></Grid.RowDefinitions>
+                                        <TextBlock Grid.Row="0" Text="CHAT" Style="{StaticResource SectionHeaderStyle}"/>
+                                        <ComboBox Grid.Row="1" x:Name="ChatRecipientCombo" Visibility="Collapsed" PlaceholderText="Choose a family member" SelectionChanged="OnChatRecipientChanged"/>
+                                        <StackPanel Grid.Row="2" Spacing="8">
+                                            <CheckBox x:Name="SpokenChatCheckBox" Content="Read incoming messages aloud" Checked="OnSpokenChatToggled" Unchecked="OnSpokenChatToggled"/>
+                                            <TextBlock x:Name="ChatChimeNotice" Text="🔔 New message" FontSize="11" FontWeight="Bold" Foreground="#FFB6502F" Visibility="Collapsed"/>
+                                        </StackPanel>
+                                        <ScrollViewer Grid.Row="3" x:Name="ChatScrollViewer" MinHeight="250" MaxHeight="420"><StackPanel x:Name="ChatMessagesPanel" Spacing="6"/></ScrollViewer>
+                                        <Grid x:Name="ChatComposerGrid" Grid.Row="4" ColumnSpacing="6"><Grid.ColumnDefinitions><ColumnDefinition Width="*"/><ColumnDefinition Width="Auto"/></Grid.ColumnDefinitions>
                                             <TextBox x:Name="ChatInputBox" Grid.Column="0" PlaceholderText="Type a message..." KeyDown="OnChatInputKeyDown"/>
                                             <Button x:Name="ChatSendButton" Grid.Column="1" Content="Send" Style="{StaticResource SmallComicButtonStyle}" Background="#FF2F6F6B" Foreground="#FFFBF4E4" Click="OnChatSendClick"/>
                                         </Grid>
-                                    </StackPanel>
+                                    </Grid>
                                 </Border>
                             </Grid>
 
-                            <Grid ColumnSpacing="16">
-                                <Grid.ColumnDefinitions><ColumnDefinition Width="*"/><ColumnDefinition Width="390"/></Grid.ColumnDefinitions>
+                            <Grid x:Name="AttentionRegionsGrid" ColumnSpacing="16" RowSpacing="14">
+                                <Grid.ColumnDefinitions><ColumnDefinition Width="*"/><ColumnDefinition x:Name="AttentionComposerColumn" Width="390"/></Grid.ColumnDefinitions>
+                                <Grid.RowDefinitions><RowDefinition Height="Auto"/><RowDefinition x:Name="AttentionComposerRow" Height="0"/></Grid.RowDefinitions>
+                                <VisualStateManager.VisualStateGroups>
+                                    <VisualStateGroup>
+                                        <VisualState x:Name="AttentionWideLayout">
+                                            <VisualState.StateTriggers><AdaptiveTrigger MinWindowWidth="720"/></VisualState.StateTriggers>
+                                        </VisualState>
+                                        <VisualState x:Name="AttentionNarrowLayout">
+                                            <VisualState.StateTriggers><AdaptiveTrigger MinWindowWidth="0"/></VisualState.StateTriggers>
+                                            <VisualState.Setters>
+                                                <Setter Target="AttentionComposerPanel.(Grid.Row)" Value="1"/>
+                                                <Setter Target="AttentionComposerPanel.(Grid.Column)" Value="0"/>
+                                                <Setter Target="AttentionComposerPanel.(Grid.ColumnSpan)" Value="2"/>
+                                                <Setter Target="AttentionComposerColumn.Width" Value="0"/>
+                                                <Setter Target="AttentionComposerRow.Height" Value="Auto"/>
+                                            </VisualState.Setters>
+                                        </VisualState>
+                                    </VisualStateGroup>
+                                </VisualStateManager.VisualStateGroups>
                                 <Border Grid.Column="0" Style="{StaticResource PanelStyle}" Background="#FFF4E8CE">
                                     <StackPanel Spacing="8">
                                         <TextBlock Text="ATTENTION CARDS" Style="{StaticResource SectionHeaderStyle}"/>
@@ -123,7 +186,7 @@
                                         <ScrollViewer x:Name="AttentionCardShelfScrollViewer" HorizontalScrollMode="Enabled" HorizontalScrollBarVisibility="Auto" VerticalScrollMode="Disabled" MinHeight="145" MaxHeight="175"><StackPanel x:Name="AttentionCardShelfPanel" Orientation="Horizontal" Spacing="14"/></ScrollViewer>
                                     </StackPanel>
                                 </Border>
-                                <Border Grid.Column="1" Style="{StaticResource PanelStyle}">
+                                <Border x:Name="AttentionComposerPanel" Grid.Column="1" Style="{StaticResource PanelStyle}">
                                     <StackPanel Spacing="8">
                                         <TextBlock Text="SEND AN ATTENTION CARD" Style="{StaticResource SectionHeaderStyle}"/>
                                         <StackPanel Orientation="Horizontal" Spacing="10">

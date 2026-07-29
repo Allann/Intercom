@@ -76,13 +76,55 @@ public sealed class ApprovedPrototypeShellTests
     }
 
     [Fact]
-    public void AudioDevices_AreExplicitlySelectable()
+    public void AudioDevices_AreManagedByWindowsSettingsInsteadOfTheVoiceCard()
+    {
+        var xaml = File.ReadAllText(XamlPath);
+        var settingsPath = Path.GetFullPath(Path.Combine(Path.GetDirectoryName(XamlPath)!, "SettingsDialog.xaml"));
+        var settingsXaml = File.ReadAllText(settingsPath);
+
+        Assert.Contains("x:Name=\"SettingsButton\"", xaml);
+        Assert.DoesNotContain("x:Name=\"AudioInputCombo\"", xaml);
+        Assert.DoesNotContain("x:Name=\"AudioOutputCombo\"", xaml);
+        Assert.DoesNotContain("x:Name=\"AudioDiagnosticsText\"", xaml);
+        Assert.DoesNotContain("x:Name=\"AudioInputCombo\"", settingsXaml);
+        Assert.DoesNotContain("x:Name=\"AudioOutputCombo\"", settingsXaml);
+        Assert.Contains("ms-settings:sound-defaultinputproperties", File.ReadAllText(Path.ChangeExtension(settingsPath, ".xaml.cs")));
+        Assert.Contains("ms-settings:sound-defaultoutputproperties", File.ReadAllText(Path.ChangeExtension(settingsPath, ".xaml.cs")));
+        Assert.Contains("new AudioGraphDevice()", File.ReadAllText(CodeBehindPath));
+    }
+
+    [Fact]
+    public void ChatComposer_IsAnchoredToTheBottomOfTheChatCard()
     {
         var xaml = File.ReadAllText(XamlPath);
 
-        Assert.Contains("x:Name=\"AudioInputCombo\"", xaml);
-        Assert.Contains("x:Name=\"AudioOutputCombo\"", xaml);
-        Assert.Contains("OnAudioDeviceSelectionChanged", xaml);
+        Assert.Contains("x:Name=\"ChatLayoutGrid\"", xaml);
+        Assert.Contains("x:Name=\"ChatComposerGrid\" Grid.Row=\"4\"", xaml);
+        Assert.Contains("<RowDefinition Height=\"*\"/>", xaml);
+    }
+
+    [Fact]
+    public void MainLayout_UsesResponsiveColumnsAndReflowBreakpoints()
+    {
+        var xaml = File.ReadAllText(XamlPath);
+
+        Assert.Contains("x:Name=\"MainRegionsGrid\"", xaml);
+        Assert.Contains("x:Name=\"FamilyColumn\" Width=\"210\"", xaml);
+        Assert.Contains("x:Name=\"VoiceColumn\" Width=\"480\"", xaml);
+        Assert.Contains("x:Name=\"ChatColumn\" Width=\"*\"", xaml);
+        Assert.Contains("x:Name=\"MediumLayout\"", xaml);
+        Assert.Contains("x:Name=\"NarrowLayout\"", xaml);
+        Assert.DoesNotContain("MaxWidth=\"1100\"", xaml);
+    }
+
+    [Fact]
+    public void HandsFree_IsEnabledForOneConnectedSelectedPeer()
+    {
+        var codeBehind = File.ReadAllText(CodeBehindPath);
+
+        Assert.DoesNotContain("HandsFreeButton.IsEnabled = false;", codeBehind);
+        Assert.Contains("HandsFreeButton.IsEnabled = _handsFreeActive ||", codeBehind);
+        Assert.Contains("_peerHost.ConnectedPeerIds.Contains(handsFreePeer.PeerId)", codeBehind);
     }
 
     [Fact]

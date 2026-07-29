@@ -52,9 +52,6 @@ public sealed partial class MainWindow : Window, IResidentWindow
     readonly DispatcherQueue _dispatcherQueue;
     readonly DispatcherQueueTimer _chatChimeHideTimer;
     readonly DispatcherQueueTimer _audioDiagnosticsTimer;
-    readonly AudioDeviceSettingsStore _audioDeviceSettingsStore = new();
-    AudioDeviceSettings _audioDeviceSettings = new(null, null);
-    bool _loadingAudioDevices;
 
     IdentityStore? _identityStore;
     DndSettingsStore? _dndSettings;
@@ -134,52 +131,15 @@ public sealed partial class MainWindow : Window, IResidentWindow
 
         InitializeChatDrawer();
         InitializeAttentionCardShelf();
-        _ = LoadAudioDevicesAsync();
     }
 
-    async Task LoadAudioDevicesAsync()
+    async void OnSettingsClick(object sender, RoutedEventArgs e)
     {
-        try
+        var dialog = new SettingsDialog
         {
-            _audioDeviceSettings = _audioDeviceSettingsStore.Load();
-            var devices = await AudioGraphDevice.GetDevicesAsync();
-            var inputs = new List<AudioDeviceChoice> { new(null, "Windows communications default"), new("", "No microphone (listen only)") };
-            inputs.AddRange(devices.Inputs);
-            var outputs = new List<AudioDeviceChoice> { new(null, "Windows communications default") };
-            outputs.AddRange(devices.Outputs);
-            _loadingAudioDevices = true;
-            AudioInputCombo.ItemsSource = inputs;
-            AudioOutputCombo.ItemsSource = outputs;
-            AudioInputCombo.SelectedItem = inputs.FirstOrDefault(item => item.Id == _audioDeviceSettings.InputDeviceId) ?? inputs[0];
-            AudioOutputCombo.SelectedItem = outputs.FirstOrDefault(item => item.Id == _audioDeviceSettings.OutputDeviceId) ?? outputs[0];
-            _loadingAudioDevices = false;
-            RenderSelectedAudioDevices();
-        }
-        catch (Exception ex)
-        {
-            AudioDiagnosticsText.Text = "Could not read the Windows communications audio devices.";
-            DiagnosticLog.Current.Error("audio.devices-failed", "Could not resolve communications audio devices.", ex);
-        }
-    }
-
-    async void OnAudioDeviceSelectionChanged(object sender, SelectionChangedEventArgs e)
-    {
-        if (_loadingAudioDevices || AudioInputCombo.SelectedItem is not AudioDeviceChoice input
-            || AudioOutputCombo.SelectedItem is not AudioDeviceChoice output) return;
-        _audioDeviceSettings = new(input.Id, output.Id);
-        _audioDeviceSettingsStore.Save(_audioDeviceSettings);
-        await StopAudioAsync();
-        RefreshMessagingPeers();
-        RenderSelectedAudioDevices();
-        PushToTalkHint.Text = "Audio device changed. Hold the button to reconnect voice.";
-        DiagnosticLog.Current.Info("audio.devices-selected", $"mic={input.Name} speaker={output.Name}");
-    }
-
-    void RenderSelectedAudioDevices()
-    {
-        var input = (AudioInputCombo.SelectedItem as AudioDeviceChoice)?.Name ?? "Loading…";
-        var output = (AudioOutputCombo.SelectedItem as AudioDeviceChoice)?.Name ?? "Loading…";
-        AudioDiagnosticsText.Text = $"Mic: {input}\nSpeaker: {output}\nVoice session: not initialized.";
+            XamlRoot = Content.XamlRoot,
+        };
+        await dialog.ShowAsync();
     }
 
     void OnAppWindowClosing(AppWindow sender, AppWindowClosingEventArgs args)
@@ -667,14 +627,13 @@ public sealed partial class MainWindow : Window, IResidentWindow
             var negotiator = new AudioSessionNegotiator(
                 _peerHost.CreateAudioControlTransport(peer.PeerId),
                 remoteAddress,
-                () => new AudioGraphDevice(_audioDeviceSettings.InputDeviceId, _audioDeviceSettings.OutputDeviceId));
+                () => new AudioGraphDevice());
             negotiator.IncomingOffer += (offer, messageId) =>
                 _ = AcceptIncomingAudioAsync(peer.PeerId, negotiator, offer, messageId);
             negotiator.SessionReady += session => OnAudioSessionReady(peer.PeerId, session);
             negotiator.NegotiationFailed += reason => _dispatcherQueue.TryEnqueue(() =>
             {
                 PushToTalkHint.Text = reason;
-                AudioDiagnosticsText.Text += $"\nVoice negotiation failed: {reason}";
             });
             _audioNegotiators[peer.PeerId] = negotiator;
             DiagnosticLog.Current.Info("audio.negotiator-created", $"peer={peer.PeerId} remote={remoteAddress} source={(endpoint is null ? "connection" : "discovery")}");
@@ -756,13 +715,7 @@ public sealed partial class MainWindow : Window, IResidentWindow
             return;
         }
 
-        var d = session.Diagnostics;
         TestSpeakerButton.IsEnabled = session.State.State is AudioSessionState.Running or AudioSessionState.Degraded;
-        var levelPercent = Math.Clamp(d.CapturePeak * 100 / short.MaxValue, 0, 100);
-        AudioDiagnosticsText.Text =
-            $"Mic: {d.InputDeviceName}\nSpeaker: {d.OutputDeviceName}\n" +
-            $"Mic level: {levelPercent}% · captured: {d.CapturedSamples} samples · sent: {d.SentPackets}\n" +
-            $"received: {d.ReceivedPackets} · played: {d.PlayedFrames} · concealed: {d.ConcealedFrames}";
     }
 
     void UpdateMessagingEnabled()
@@ -770,7 +723,9 @@ public sealed partial class MainWindow : Window, IResidentWindow
         if (_peerHost is null) return;
         ChatSendButton.IsEnabled = _selectedChatPeerId is Guid chatPeer && _peerHost.ConnectedPeerIds.Contains(chatPeer);
         SendAttentionCardButton.IsEnabled = _selectedAttentionPeerId is Guid cardPeer && _peerHost.ConnectedPeerIds.Contains(cardPeer);
-        HandsFreeButton.IsEnabled = false;
+        HandsFreeButton.IsEnabled = _handsFreeActive ||
+            HandsFreeRecipientCombo.SelectedItem is PeerChoice handsFreePeer
+            && _peerHost.ConnectedPeerIds.Contains(handsFreePeer.PeerId);
     }
 
     void OnChatRecipientChanged(object sender, SelectionChangedEventArgs e)
