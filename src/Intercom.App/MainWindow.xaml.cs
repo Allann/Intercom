@@ -931,7 +931,11 @@ public sealed partial class MainWindow : Window, IResidentWindow
                 session.StartTransmitting();
             else if (_pushToTalkHeld && HandsFreeRecipientCombo.SelectedItem is PeerChoice choice && choice.PeerId == peerId)
                 session.StartTransmitting();
-            PushToTalkHint.Text = mode == AudioInteractionMode.HandsFree
+            PushToTalkHint.Text = !session.CanTransmit
+                ? "Receive-only audio active. This PC has no microphone."
+                : !session.CanReceive
+                ? "Transmit-only audio active. This PC has no speaker."
+                : mode == AudioInteractionMode.HandsFree
                 ? "Hands-free session active. Both sides can speak."
                 : mode == AudioInteractionMode.GroupVoice ? "Group audio ready; transmission follows the voice floor."
                 : session.Transmitting ? "Transmitting while held." : "Voice ready. Hold the button while you speak.";

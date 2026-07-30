@@ -163,6 +163,8 @@ public sealed class AudioSessionNegotiatorTests
     {
         public string InputDeviceName => "Fake microphone";
         public string OutputDeviceName => "Fake speaker";
+        public bool CanCapture => true;
+        public bool CanRender => true;
         public event Action<short[]>? Captured;
         public event Action<Exception>? DeviceFailed { add { } remove { } }
         public TaskCompletionSource<short[]> Played { get; } = new(TaskCreationOptions.RunContinuationsAsynchronously);

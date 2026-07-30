@@ -59,6 +59,21 @@ public sealed class AudioPipelineLoopbackTests
         Assert.True((await ReadAudibleAsync(device)).Max(sample => Math.Abs((int)sample)) > 1_000);
     }
 
+    [Fact]
+    public async Task ReceiveOnlyDeviceStartsAndCannotBePutIntoTransmitMode()
+    {
+        var device = new LoopbackDevice(canCapture: false, canRender: true);
+        await using var loopback = await StartLoopbackAsync(device);
+
+        loopback.StartTransmitting();
+        loopback.PlayTestTone();
+
+        Assert.False(loopback.CanTransmit);
+        Assert.True(loopback.CanReceive);
+        Assert.False(loopback.Transmitting);
+        Assert.True(await device.Played.Reader.WaitToReadAsync().AsTask().WaitAsync(TimeSpan.FromSeconds(1)));
+    }
+
     static async Task<short[]> ReadAudibleAsync(LoopbackDevice device)
     {
         using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(2));
@@ -93,8 +108,19 @@ public sealed class AudioPipelineLoopbackTests
 
     sealed class LoopbackDevice : IAudioDevice
     {
+        readonly bool _canCapture;
+        readonly bool _canRender;
+
+        public LoopbackDevice(bool canCapture = true, bool canRender = true)
+        {
+            _canCapture = canCapture;
+            _canRender = canRender;
+        }
+
         public string InputDeviceName => "Loopback microphone";
         public string OutputDeviceName => "Loopback speaker";
+        public bool CanCapture => _canCapture;
+        public bool CanRender => _canRender;
         public event Action<short[]>? Captured;
         public event Action<Exception>? DeviceFailed { add { } remove { } }
         public Channel<short[]> Played { get; } = Channel.CreateUnbounded<short[]>();

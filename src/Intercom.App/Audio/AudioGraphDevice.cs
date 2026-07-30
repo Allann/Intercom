@@ -37,6 +37,8 @@ public sealed class AudioGraphDevice : Intercom.Audio.IAudioDevice
     public event Action<Exception>? DeviceFailed;
     public string InputDeviceName { get; private set; } = "Not initialized";
     public string OutputDeviceName { get; private set; } = "Not initialized";
+    public bool CanCapture => _input is not null;
+    public bool CanRender => _output is not null;
 
     public static async Task<(IReadOnlyList<AudioDeviceChoice> Inputs, IReadOnlyList<AudioDeviceChoice> Outputs)> GetDevicesAsync()
     {
@@ -73,47 +75,85 @@ public sealed class AudioGraphDevice : Intercom.Audio.IAudioDevice
         _graph = graphResult.Graph;
         _graph.UnrecoverableErrorOccurred += OnUnrecoverableError;
 
-        var outputResult = await _graph.CreateDeviceOutputNodeAsync();
-        if (outputResult.Status != AudioDeviceNodeCreationStatus.Success)
-            throw new InvalidOperationException($"Speaker creation failed: {outputResult.Status}.");
-
-        _output = outputResult.DeviceOutputNode;
-        if (_inputDeviceId != "")
+        try
         {
-            CreateAudioDeviceInputNodeResult inputResult;
-            if (string.IsNullOrWhiteSpace(_inputDeviceId))
-                inputResult = await _graph.CreateDeviceInputNodeAsync(Windows.Media.Capture.MediaCategory.Communications);
+            var outputResult = await _graph.CreateDeviceOutputNodeAsync();
+            if (outputResult.Status == AudioDeviceNodeCreationStatus.Success)
+            {
+                _output = outputResult.DeviceOutputNode;
+                OutputDeviceName = _output.Device?.Name ?? "Windows default communications speaker";
+            }
             else
             {
-                var inputDevice = await DeviceInformation.CreateFromIdAsync(_inputDeviceId);
-                inputResult = await _graph.CreateDeviceInputNodeAsync(Windows.Media.Capture.MediaCategory.Communications, frameEncoding, inputDevice);
+                OutputDeviceName = "No speaker (transmit only)";
+                DiagnosticLog.Current.Warning("audio.playback-unavailable", $"status={outputResult.Status}");
             }
-            if (inputResult.Status != AudioDeviceNodeCreationStatus.Success)
-                throw new InvalidOperationException($"Microphone creation failed: {inputResult.Status}.");
-            _input = inputResult.DeviceInputNode;
-            InputDeviceName = _input.Device?.Name ?? "Windows default communications microphone";
         }
-        else InputDeviceName = "No microphone (listen only)";
-        OutputDeviceName = _output.Device?.Name ?? "Windows default communications speaker";
+        catch (Exception ex)
+        {
+            OutputDeviceName = "No speaker (transmit only)";
+            DiagnosticLog.Current.Warning("audio.playback-unavailable", "Speaker initialization failed; capture remains available.", ex);
+        }
+
+        if (_inputDeviceId != "")
+        {
+            try
+            {
+                CreateAudioDeviceInputNodeResult inputResult;
+                if (string.IsNullOrWhiteSpace(_inputDeviceId))
+                    inputResult = await _graph.CreateDeviceInputNodeAsync(Windows.Media.Capture.MediaCategory.Communications);
+                else
+                {
+                    var inputDevice = await DeviceInformation.CreateFromIdAsync(_inputDeviceId);
+                    inputResult = await _graph.CreateDeviceInputNodeAsync(Windows.Media.Capture.MediaCategory.Communications, frameEncoding, inputDevice);
+                }
+                if (inputResult.Status == AudioDeviceNodeCreationStatus.Success)
+                {
+                    _input = inputResult.DeviceInputNode;
+                    InputDeviceName = _input.Device?.Name ?? "Windows default communications microphone";
+                }
+                else
+                {
+                    InputDeviceName = "No microphone (receive only)";
+                    DiagnosticLog.Current.Warning("audio.capture-unavailable", $"status={inputResult.Status}");
+                }
+            }
+            catch (Exception ex)
+            {
+                InputDeviceName = "No microphone (receive only)";
+                DiagnosticLog.Current.Warning("audio.capture-unavailable", "Microphone initialization failed; playback remains available.", ex);
+            }
+        }
+        else InputDeviceName = "No microphone (receive only)";
+        if (!CanCapture && !CanRender)
+            throw new InvalidOperationException("No microphone or speaker is available.");
+
         // AudioFrame memory is float32. Convert explicitly at this boundary so
         // the codec/network pipeline remains mono PCM16.
-        _capture = _graph.CreateFrameOutputNode(frameEncoding);
-        _render = _graph.CreateFrameInputNode(frameEncoding);
+        if (CanCapture) _capture = _graph.CreateFrameOutputNode(frameEncoding);
+        if (CanRender) _render = _graph.CreateFrameInputNode(frameEncoding);
         DiagnosticLog.Current.Info(
             "audio.frame-format",
-            $"capture={_capture.EncodingProperties.Subtype}/{_capture.EncodingProperties.SampleRate}Hz/{_capture.EncodingProperties.ChannelCount}ch/{_capture.EncodingProperties.BitsPerSample}bit " +
-            $"render={_render.EncodingProperties.Subtype}/{_render.EncodingProperties.SampleRate}Hz/{_render.EncodingProperties.ChannelCount}ch/{_render.EncodingProperties.BitsPerSample}bit " +
+            $"capture={(CanCapture ? "available" : "unavailable")} " +
+            $"render={(CanRender ? "available" : "unavailable")} " +
             $"graph={_graph.EncodingProperties.Subtype}/{_graph.EncodingProperties.SampleRate}Hz/{_graph.EncodingProperties.ChannelCount}ch/{_graph.EncodingProperties.BitsPerSample}bit quantum={_graph.SamplesPerQuantum}");
-        _input?.AddOutgoingConnection(_capture);
-        _render.AddOutgoingConnection(_output);
-        _graph.QuantumStarted += OnQuantumStarted;
-        _render.QuantumStarted += OnRenderQuantumStarted;
+        if (_input is not null && _capture is not null)
+        {
+            _input.AddOutgoingConnection(_capture);
+            _graph.QuantumStarted += OnQuantumStarted;
+        }
+        if (_render is not null && _output is not null)
+        {
+            _render.AddOutgoingConnection(_output);
+            _render.QuantumStarted += OnRenderQuantumStarted;
+        }
         _graph.Start();
     }
 
     public void QueuePlayback(short[] pcm)
     {
         ArgumentNullException.ThrowIfNull(pcm);
+        if (!CanRender) return;
         _playback.Enqueue(pcm);
     }
 

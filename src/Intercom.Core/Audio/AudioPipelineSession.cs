@@ -60,6 +60,8 @@ public sealed class AudioPipelineSession : IAsyncDisposable
 
     public AudioSessionStateMachine State { get; } = new();
     public Guid SessionId => _sessionId;
+    public bool CanTransmit => _device.CanCapture;
+    public bool CanReceive => _device.CanRender;
     public bool Transmitting { get { lock (_gate) return _transmitting; } }
     public AudioPipelineDiagnostics Diagnostics => new(
         _device.InputDeviceName,
@@ -87,7 +89,7 @@ public sealed class AudioPipelineSession : IAsyncDisposable
         }
     }
 
-    public void StartTransmitting() { lock (_gate) _transmitting = true; }
+    public void StartTransmitting() { lock (_gate) _transmitting = _device.CanCapture; }
     public void StopTransmitting() { lock (_gate) _transmitting = false; }
 
     void OnCaptured(short[] samples)

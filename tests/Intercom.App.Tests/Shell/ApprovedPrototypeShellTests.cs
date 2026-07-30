@@ -205,4 +205,18 @@ public sealed class ApprovedPrototypeShellTests
         Assert.DoesNotContain("_graph?.Stop();\n        DeviceFailed?.Invoke", code.Replace("\r\n", "\n"));
         Assert.Contains("audio.callback-failed", code);
     }
+
+    [Fact]
+    public void AudioGraph_AllowsCaptureAndPlaybackDevicesToBeAbsentIndependently()
+    {
+        var path = Path.GetFullPath(Path.Combine(Path.GetDirectoryName(XamlPath)!, "Audio", "AudioGraphDevice.cs"));
+        var code = File.ReadAllText(path);
+
+        Assert.Contains("audio.capture-unavailable", code);
+        Assert.Contains("audio.playback-unavailable", code);
+        Assert.DoesNotContain("throw new InvalidOperationException($\"Microphone creation failed", code);
+        Assert.DoesNotContain("throw new InvalidOperationException($\"Speaker creation failed", code);
+        Assert.Contains("No microphone (receive only)", code);
+        Assert.Contains("No speaker (transmit only)", code);
+    }
 }
