@@ -9,6 +9,19 @@ public sealed class ApprovedPrototypeShellTests
     static readonly string CodeBehindPath = Path.ChangeExtension(XamlPath, ".xaml.cs");
 
     [Fact]
+    public void GroupFloorPanelUsesReplicatedServiceAndKeepsHandsFreeStateSeparate()
+    {
+        var code = File.ReadAllText(CodeBehindPath);
+
+        Assert.Contains("new GroupFloorService", code);
+        Assert.Contains("End Session for Everyone", code);
+        Assert.Contains("ParticipantDeparted", code);
+        Assert.Contains("GroupFloorQueuePanel.Children.Add", code);
+        Assert.DoesNotContain("_hasGroupFloor = _handRaised", code);
+        Assert.DoesNotContain("_handsFreeActive = _hasGroupFloor", code);
+    }
+
+    [Fact]
     public void MainWindow_ContainsTheApprovedIntegratedPrototypeRegions()
     {
         var xaml = File.ReadAllText(XamlPath);

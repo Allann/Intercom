@@ -24,7 +24,8 @@ public sealed class GroupFloorService : IDisposable
 
     public async Task JoinAsync(Guid peerId, CancellationToken cancellationToken)
     {
-        await _audio.PrepareAsync(peerId, cancellationToken).ConfigureAwait(false);
+        if (_localPeerId.CompareTo(peerId) < 0)
+            await _audio.PrepareAsync(peerId, cancellationToken).ConfigureAwait(false);
         await SendAsync(GroupFloorCommandKind.Join, peerId, cancellationToken).ConfigureAwait(false);
     }
 
@@ -35,12 +36,22 @@ public sealed class GroupFloorService : IDisposable
     public Task InterruptAsync(CancellationToken ct) => SendAsync(GroupFloorCommandKind.Interrupt, _localPeerId, ct);
     public Task EndForEveryoneAsync(CancellationToken ct) => SendAsync(GroupFloorCommandKind.EndSession, Guid.Empty, ct);
 
+    /// <summary>Applies transport-observed departure locally. Every remaining
+    /// peer observes the same roster loss and independently reaches the same
+    /// coordinator without an election or a spoofable broadcast.</summary>
+    public void ParticipantDeparted(Guid peerId)
+    {
+        Session.Apply(new GroupFloorCommand(Session.SessionId, GroupFloorCommandKind.Leave, peerId, peerId));
+        StateChanged?.Invoke();
+    }
+
     async Task SendAsync(GroupFloorCommandKind kind, Guid subject, CancellationToken cancellationToken)
     {
         var command = new GroupFloorCommand(Session.SessionId, kind, _localPeerId, subject);
+        var recipients = Session.Participants.Where(id => id != _localPeerId).ToArray();
         Session.Apply(command);
         StateChanged?.Invoke();
-        await _transport.BroadcastAsync(GroupFloorFrameCodec.Encode(command), cancellationToken).ConfigureAwait(false);
+        await _transport.SendAsync(recipients, GroupFloorFrameCodec.Encode(command), cancellationToken).ConfigureAwait(false);
     }
 
     void OnFrameReceived(Guid senderPeerId, ControlFrame frame)
@@ -51,6 +62,8 @@ public sealed class GroupFloorService : IDisposable
             var command = GroupFloorFrameCodec.Decode(frame);
             if (command.ActorPeerId != senderPeerId) throw new InvalidOperationException("Group-floor actor does not match its authenticated sender.");
             Session.Apply(command);
+            if (command.Kind == GroupFloorCommandKind.Join && _localPeerId.CompareTo(command.SubjectPeerId) < 0)
+                _ = _audio.PrepareAsync(command.SubjectPeerId, CancellationToken.None);
             StateChanged?.Invoke();
         }
         catch (Exception ex) when (ex is MalformedFrameException or InvalidOperationException)

@@ -9,8 +9,8 @@ public sealed class GroupFloorServiceTests
     [Fact]
     public async Task JoinPreparesAudioBeforeBroadcastButGrantDoesNotRenegotiate()
     {
-        var local = Guid.NewGuid();
-        var remote = Guid.NewGuid();
+        var local = Guid.Parse("00000000-0000-0000-0000-000000000001");
+        var remote = Guid.Parse("ffffffff-ffff-ffff-ffff-ffffffffffff");
         var transport = new FakeTransport();
         var audio = new FakeAudioPreparer();
         var service = new GroupFloorService(local, new GroupFloorSession(Guid.NewGuid(), local, [local]), transport, audio);
@@ -40,11 +40,26 @@ public sealed class GroupFloorServiceTests
         Assert.Empty(service.Session.RaiseHandQueue);
     }
 
+    [Fact]
+    public void ObservedCoordinatorDepartureRecomputesWithoutBroadcast()
+    {
+        var starter = Guid.Parse("ffffffff-ffff-ffff-ffff-ffffffffffff");
+        var local = Guid.Parse("00000000-0000-0000-0000-000000000002");
+        var lowest = Guid.Parse("00000000-0000-0000-0000-000000000001");
+        var transport = new FakeTransport();
+        using var service = new GroupFloorService(local, new GroupFloorSession(Guid.NewGuid(), starter, [starter, local, lowest]), transport, new FakeAudioPreparer());
+
+        service.ParticipantDeparted(starter);
+
+        Assert.Equal(lowest, service.Session.CoordinatorPeerId);
+        Assert.Empty(transport.Sent);
+    }
+
     sealed class FakeTransport : IGroupFloorTransport
     {
         public event Action<Guid, ControlFrame>? FrameReceived;
         public List<ControlFrame> Sent { get; } = [];
-        public Task BroadcastAsync(ControlFrame frame, CancellationToken cancellationToken) { Sent.Add(frame); return Task.CompletedTask; }
+        public Task SendAsync(IEnumerable<Guid> participantPeerIds, ControlFrame frame, CancellationToken cancellationToken) { Sent.Add(frame); return Task.CompletedTask; }
         public void Receive(Guid sender, ControlFrame frame) => FrameReceived?.Invoke(sender, frame);
     }
 

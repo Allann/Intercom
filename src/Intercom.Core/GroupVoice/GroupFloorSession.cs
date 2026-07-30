@@ -110,6 +110,7 @@ public sealed class GroupFloorSession
 
 public enum GroupFloorCommandKind : byte
 {
+    StartSession = 8,
     Join = 1,
     Leave = 2,
     RaiseHand = 3,

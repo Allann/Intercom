@@ -18,6 +18,7 @@ using Intercom.Lifecycle;
 using Intercom.Presence;
 using Intercom.Pairing;
 using Intercom.Routing;
+using Intercom.GroupVoice;
 using Intercom.Updates;
 using Intercom.App.AttentionCards;
 using Intercom.App.Audio;
@@ -102,6 +103,8 @@ public sealed partial class MainWindow : Window, IResidentWindow
     bool _handsFreeActive;
     Guid? _handsFreePeerId;
     bool _pushToTalkHeld;
+    IGroupFloorTransport? _groupFloorTransport;
+    GroupFloorService? _groupFloorService;
 
     public MainWindow()
     {
@@ -283,37 +286,120 @@ public sealed partial class MainWindow : Window, IResidentWindow
         }.ShowAsync();
     }
 
-    void OnRaiseHandClick(object sender, RoutedEventArgs e)
+    async void OnRaiseHandClick(object sender, RoutedEventArgs e)
     {
-        _handRaised = !_handRaised;
-        _hasGroupFloor = _handRaised;
-        RaiseHandButton.Content = _handRaised ? "✓ Floor Granted" : "✋ Raise Hand";
-        GroupFloorSpeakerText.Text = _handRaised ? "● You have the floor" : "● Nobody has the floor";
-        GroupFloorCoordinatorText.Text = _handRaised ? "You are coordinator" : "Start a floor to become coordinator";
-        EndFloorButton.Visibility = _handRaised ? Visibility.Visible : Visibility.Collapsed;
+        try
+        {
+            if (_groupFloorService is null) await StartGroupFloorAsync();
+            else if (_handRaised) await _groupFloorService.LowerHandAsync(CancellationToken.None);
+            else await _groupFloorService.RaiseHandAsync(CancellationToken.None);
+        }
+        catch (Exception ex) { ShowGroupFloorError(ex); }
+    }
+
+    async void OnInterruptClick(object sender, RoutedEventArgs e)
+    {
+        if (_groupFloorService is null || _dndSettings?.DndEnabled == true) return;
+        try { await _groupFloorService.InterruptAsync(CancellationToken.None); }
+        catch (Exception ex) { ShowGroupFloorError(ex); }
+    }
+
+    async void OnEndFloorClick(object sender, RoutedEventArgs e)
+    {
+        if (_groupFloorService is null) return;
+        try { await _groupFloorService.EndForEveryoneAsync(CancellationToken.None); }
+        catch (Exception ex) { ShowGroupFloorError(ex); }
+    }
+
+    async Task StartGroupFloorAsync()
+    {
+        if (_identityStore is null || _groupFloorTransport is null || _peerHost is null) return;
+        var localId = _identityStore.Identity.PeerId;
+        var peers = _selectedFamilyPeerIds.Where(_peerHost.ConnectedPeerIds.Contains).ToArray();
+        if (peers.Length == 0) throw new InvalidOperationException("Select at least one online family member first.");
+        var session = new GroupFloorSession(Guid.NewGuid(), localId, peers.Prepend(localId));
+        var service = new GroupFloorService(localId, session, _groupFloorTransport, new GroupAudioPreparer(this));
+        AttachGroupFloorService(service);
+        foreach (var peerId in peers)
+        {
+            var start = new GroupFloorCommand(session.SessionId, GroupFloorCommandKind.StartSession, localId, peerId);
+            await _groupFloorTransport.SendAsync([peerId], GroupFloorFrameCodec.Encode(start), CancellationToken.None);
+        }
+        foreach (var peerId in peers) await service.JoinAsync(peerId, CancellationToken.None);
+        await service.GrantFloorAsync(localId, CancellationToken.None);
+    }
+
+    void OnGroupFloorFrame(Guid senderPeerId, Intercom.ControlChannel.ControlFrame frame)
+    {
+        if (_identityStore is null || _groupFloorTransport is null || _groupFloorService is not null) return;
+        try
+        {
+            var start = GroupFloorFrameCodec.Decode(frame);
+            if (start.Kind != GroupFloorCommandKind.StartSession || start.ActorPeerId != senderPeerId || start.SubjectPeerId != _identityStore.Identity.PeerId) return;
+            var session = new GroupFloorSession(start.SessionId, senderPeerId, [senderPeerId, _identityStore.Identity.PeerId]);
+            AttachGroupFloorService(new GroupFloorService(_identityStore.Identity.PeerId, session, _groupFloorTransport, new GroupAudioPreparer(this)));
+            _ = new GroupAudioPreparer(this).PrepareAsync(senderPeerId, CancellationToken.None);
+        }
+        catch (Exception ex) { ShowGroupFloorError(ex); }
+    }
+
+    void AttachGroupFloorService(GroupFloorService service)
+    {
+        _groupFloorService?.Dispose();
+        _groupFloorService = service;
+        service.StateChanged += () => _dispatcherQueue.TryEnqueue(RenderGroupFloor);
+        service.CommandRejected += ex => _dispatcherQueue.TryEnqueue(() => ShowGroupFloorError(ex));
+        RenderGroupFloor();
+    }
+
+    void RenderGroupFloor()
+    {
+        var session = _groupFloorService?.Session;
+        if (session is null || session.Ended)
+        {
+            _groupFloorService?.Dispose(); _groupFloorService = null;
+            _handRaised = _hasGroupFloor = false;
+            GroupFloorSpeakerText.Text = "● Nobody has the floor";
+            GroupFloorCoordinatorText.Text = "Raise a hand to start a group floor";
+            GroupFloorQueuePanel.Children.Clear();
+            RaiseHandButton.Content = "✋ Raise Hand";
+            InterruptButton.IsEnabled = false;
+            EndFloorButton.Visibility = Visibility.Collapsed;
+            RenderVoiceControls(); return;
+        }
+        var localId = _identityStore!.Identity.PeerId;
+        _handRaised = session.RaiseHandQueue.Contains(localId);
+        _hasGroupFloor = session.SpeakerPeerId == localId;
+        GroupFloorSpeakerText.Text = session.SpeakerPeerId is Guid speaker ? $"● {PeerName(speaker)} has the floor" : "● Nobody has the floor";
+        GroupFloorCoordinatorText.Text = session.CoordinatorPeerId == localId ? "You are coordinator" : $"Coordinator: {PeerName(session.CoordinatorPeerId)}";
+        RaiseHandButton.Content = _handRaised ? "Leave Queue" : "✋ Raise Hand";
+        InterruptButton.IsEnabled = session.SpeakerPeerId is not null && !_hasGroupFloor && _dndSettings?.DndEnabled != true;
+        EndFloorButton.Content = "End Session for Everyone";
+        EndFloorButton.Visibility = session.CoordinatorPeerId == localId ? Visibility.Visible : Visibility.Collapsed;
+        GroupFloorQueuePanel.Children.Clear();
+        for (var index = 0; index < session.RaiseHandQueue.Count; index++)
+        {
+            var peerId = session.RaiseHandQueue[index];
+            var button = new Button { Content = $"{index + 1}. {PeerName(peerId)}", IsEnabled = session.CoordinatorPeerId == localId, Tag = peerId };
+            button.Click += OnGrantFloorClick;
+            GroupFloorQueuePanel.Children.Add(button);
+        }
         RenderVoiceControls();
     }
 
-    void OnInterruptClick(object sender, RoutedEventArgs e)
+    async void OnGrantFloorClick(object sender, RoutedEventArgs e)
     {
-        _handRaised = true;
-        _hasGroupFloor = true;
-        RaiseHandButton.Content = "✓ Floor Granted";
-        GroupFloorSpeakerText.Text = "● You have the floor";
-        GroupFloorCoordinatorText.Text = "Interrupt granted directly";
-        EndFloorButton.Visibility = Visibility.Visible;
-        RenderVoiceControls();
+        if (sender is Button { Tag: Guid peerId } && _groupFloorService is not null)
+            try { await _groupFloorService.GrantFloorAsync(peerId, CancellationToken.None); } catch (Exception ex) { ShowGroupFloorError(ex); }
     }
 
-    void OnEndFloorClick(object sender, RoutedEventArgs e)
+    string PeerName(Guid? peerId) => peerId == _identityStore?.Identity.PeerId ? "You" :
+        _identityStore?.ApprovedPeers.FirstOrDefault(peer => peer.PeerId == peerId)?.FriendlyName ?? "Family member";
+
+    void ShowGroupFloorError(Exception ex)
     {
-        _handRaised = false;
-        _hasGroupFloor = false;
-        RaiseHandButton.Content = "✋ Raise Hand";
-        GroupFloorSpeakerText.Text = "● Nobody has the floor";
-        GroupFloorCoordinatorText.Text = "Start a floor to become coordinator";
-        EndFloorButton.Visibility = Visibility.Collapsed;
-        RenderVoiceControls();
+        DiagnosticLog.Current.Warning("group-floor.command-failed", ex.Message, ex);
+        GroupFloorCoordinatorText.Text = ex.Message;
     }
 
     async void OnHandsFreeClick(object sender, RoutedEventArgs e)
@@ -356,6 +442,17 @@ public sealed partial class MainWindow : Window, IResidentWindow
     async Task BeginPushToTalkAsync()
     {
         if (_pushToTalkHeld || _handsFreeActive) return;
+        if (_groupFloorService is not null)
+        {
+            if (!_hasGroupFloor) { PushToTalkHint.Text = "Raise your hand and wait for the voice floor."; return; }
+            _pushToTalkHeld = true;
+            foreach (var pair in _audioSessions.Where(pair => _groupFloorService.Session.Participants.Contains(pair.Key)))
+                pair.Value.StartTransmitting();
+            PushToTalkButton.Content = "On Air";
+            PushToTalkButton.Background = Mustard;
+            PushToTalkHint.Text = "Transmitting to the group while held.";
+            return;
+        }
         if (HandsFreeRecipientCombo.SelectedItem is not PeerChoice choice)
         {
             DiagnosticLog.Current.Warning("audio.ptt-ignored", $"reason=no-selected-peer selectedFamilyCount={_selectedFamilyPeerIds.Count}");
@@ -389,7 +486,7 @@ public sealed partial class MainWindow : Window, IResidentWindow
         PushToTalkHint.Text = "Connecting voice… keep holding to talk.";
         try
         {
-            await negotiator.OfferAsync(CancellationToken.None, AudioInteractionMode.PushToTalk);
+            await negotiator.OfferAsync(CancellationToken.None, _groupFloorService is null ? AudioInteractionMode.PushToTalk : AudioInteractionMode.GroupVoice);
         }
         catch (Exception ex)
         {
@@ -410,6 +507,9 @@ public sealed partial class MainWindow : Window, IResidentWindow
         if (!_pushToTalkHeld) return;
         DiagnosticLog.Current.Info("audio.ptt-released", $"selectedPeer={(HandsFreeRecipientCombo.SelectedItem as PeerChoice)?.PeerId}");
         _pushToTalkHeld = false;
+        if (_groupFloorService is not null)
+            foreach (var pair in _audioSessions.Where(pair => _groupFloorService.Session.Participants.Contains(pair.Key)))
+                pair.Value.StopTransmitting();
         if (HandsFreeRecipientCombo.SelectedItem is PeerChoice choice
             && _audioSessions.TryGetValue(choice.PeerId, out var session))
             session.StopTransmitting();
@@ -447,9 +547,10 @@ public sealed partial class MainWindow : Window, IResidentWindow
     {
         var connectedPeer = HandsFreeRecipientCombo.SelectedItem is PeerChoice choice
             && _peerHost?.ConnectedPeerIds.Contains(choice.PeerId) == true;
-        PushToTalkButton.IsEnabled = connectedPeer;
+        var voiceEnabled = _handsFreeActive || (_groupFloorService is not null ? _hasGroupFloor : connectedPeer);
+        PushToTalkButton.IsEnabled = voiceEnabled;
         PushToTalkButton.Content = new TextBlock { Text = "Hold to\nTalk", TextAlignment = TextAlignment.Center };
-        PushToTalkButton.Background = connectedPeer ? DndRed : new SolidColorBrush(Color.FromArgb(255, 0xCB, 0xBF, 0xA4));
+        PushToTalkButton.Background = voiceEnabled ? DndRed : new SolidColorBrush(Color.FromArgb(255, 0xCB, 0xBF, 0xA4));
         PushToTalkHint.Text = PushToTalkButton.IsEnabled
             ? "Hold the button while you speak."
             : "Choose an online family member to talk.";
@@ -534,7 +635,15 @@ public sealed partial class MainWindow : Window, IResidentWindow
     public void AttachPeerHost(LanPairingHost peerHost)
     {
         _peerHost = peerHost;
-        peerHost.ConnectionsChanged += () => _dispatcherQueue.TryEnqueue(() => UpdateDiscoveredPeers(_lastDiscoveredPeers));
+        _groupFloorTransport = peerHost.CreateGroupFloorTransport();
+        _groupFloorTransport.FrameReceived += OnGroupFloorFrame;
+        peerHost.ConnectionsChanged += () => _dispatcherQueue.TryEnqueue(() =>
+        {
+            UpdateDiscoveredPeers(_lastDiscoveredPeers);
+            if (_groupFloorService is { } floor)
+                foreach (var peerId in floor.Session.Participants.Where(id => id != _identityStore?.Identity.PeerId && !peerHost.ConnectedPeerIds.Contains(id)).ToArray())
+                    floor.ParticipantDeparted(peerId);
+        });
         RefreshMessagingPeers();
     }
 
@@ -759,10 +868,13 @@ public sealed partial class MainWindow : Window, IResidentWindow
                 RenderHandsFreeState();
                 UpdateMessagingEnabled();
             }
+            else if (mode == AudioInteractionMode.GroupVoice && _hasGroupFloor && _pushToTalkHeld)
+                session.StartTransmitting();
             else if (_pushToTalkHeld && HandsFreeRecipientCombo.SelectedItem is PeerChoice choice && choice.PeerId == peerId)
                 session.StartTransmitting();
             PushToTalkHint.Text = mode == AudioInteractionMode.HandsFree
                 ? "Hands-free session active. Both sides can speak."
+                : mode == AudioInteractionMode.GroupVoice ? "Group audio ready; transmission follows the voice floor."
                 : session.Transmitting ? "Transmitting while held." : "Voice ready. Hold the button while you speak.";
         }
         catch (Exception ex)
@@ -799,6 +911,10 @@ public sealed partial class MainWindow : Window, IResidentWindow
 
     public async Task StopAudioAsync()
     {
+        if (_groupFloorService is { Session.Ended: false } activeFloor)
+            try { await activeFloor.LeaveAsync(CancellationToken.None); } catch { }
+        _groupFloorService?.Dispose();
+        if (_groupFloorTransport is IDisposable groupTransport) groupTransport.Dispose();
         _pushToTalkHotkey.Dispose();
         _audioDiagnosticsTimer.Stop();
         foreach (var session in _audioSessions.Values.ToList()) await session.DisposeAsync();
@@ -1354,5 +1470,16 @@ public sealed partial class MainWindow : Window, IResidentWindow
     sealed record PeerChoice(Guid PeerId, string FriendlyName, string Label)
     {
         public override string ToString() => Label;
+    }
+
+    sealed class GroupAudioPreparer(MainWindow owner) : IGroupAudioPreparer
+    {
+        public async Task PrepareAsync(Guid peerId, CancellationToken cancellationToken)
+        {
+            if (owner._audioSessions.ContainsKey(peerId)) return;
+            if (!owner._audioNegotiators.TryGetValue(peerId, out var negotiator))
+                throw new InvalidOperationException($"Voice is not ready for {owner.PeerName(peerId)}.");
+            await negotiator.OfferAsync(cancellationToken, AudioInteractionMode.GroupVoice);
+        }
     }
 }

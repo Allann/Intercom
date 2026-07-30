@@ -5,7 +5,7 @@ namespace Intercom.GroupVoice;
 public interface IGroupFloorTransport
 {
     event Action<Guid, ControlFrame>? FrameReceived;
-    Task BroadcastAsync(ControlFrame frame, CancellationToken cancellationToken);
+    Task SendAsync(IEnumerable<Guid> participantPeerIds, ControlFrame frame, CancellationToken cancellationToken);
 }
 
 /// <summary>Prepares the pairwise audio paths at group join. Floor grants do

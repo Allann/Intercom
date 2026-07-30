@@ -477,8 +477,11 @@ sealed class LanGroupFloorTransport : IGroupFloorTransport, IDisposable
 
     public event Action<Guid, ControlFrame>? FrameReceived;
 
-    public Task BroadcastAsync(ControlFrame frame, CancellationToken cancellationToken) =>
-        _host.BroadcastAsync(() => frame with { MessageId = Guid.NewGuid(), Payload = frame.Payload.ToArray() }, cancellationToken);
+    public async Task SendAsync(IEnumerable<Guid> participantPeerIds, ControlFrame frame, CancellationToken cancellationToken)
+    {
+        foreach (var peerId in participantPeerIds.Distinct())
+            await _host.SendAsync(peerId, frame with { MessageId = Guid.NewGuid(), Payload = frame.Payload.ToArray() }, cancellationToken).ConfigureAwait(false);
+    }
 
     void OnApplicationFrameReceived(Guid peerId, ControlFrame frame)
     {

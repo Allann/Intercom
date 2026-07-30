@@ -7,6 +7,7 @@ public enum AudioInteractionMode : byte
 {
     PushToTalk = 1,
     HandsFree = 2,
+    GroupVoice = 3,
 }
 
 public sealed record AudioSessionOffer(Guid SessionId, Guid StreamId, ushort UdpPort, byte[] Key, uint NoncePrefix, AudioInteractionMode Mode = AudioInteractionMode.PushToTalk);
@@ -106,6 +107,7 @@ public static class AudioSessionFrameCodec
     {
         (byte)AudioInteractionMode.PushToTalk => AudioInteractionMode.PushToTalk,
         (byte)AudioInteractionMode.HandsFree => AudioInteractionMode.HandsFree,
+        (byte)AudioInteractionMode.GroupVoice => AudioInteractionMode.GroupVoice,
         _ => throw new MalformedFrameException("Unknown audio interaction mode."),
     };
 }
