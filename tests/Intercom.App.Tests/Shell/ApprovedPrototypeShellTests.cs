@@ -149,6 +149,11 @@ public sealed class ApprovedPrototypeShellTests
         Assert.Contains("public const int CycleCount = 100", soakTest);
         Assert.Contains("new AudioGraphDevice()", soakTest);
         Assert.Contains("rebound.Client.Bind", soakTest);
+        Assert.Contains("GC.GetTotalMemory", soakTest);
+        Assert.Contains("GetGuiResources", soakTest);
+        Assert.Contains("audio.lifecycle-soak-checkpoint", soakTest);
+        Assert.Contains("diagnostics.InputDeviceName", soakTest);
+        Assert.Contains("diagnostics.OutputDeviceName", soakTest);
     }
 
     [Fact]
@@ -247,6 +252,11 @@ public sealed class ApprovedPrototypeShellTests
         Assert.Contains("Interlocked.Exchange(ref _callbackFailed, 1)", code);
         Assert.DoesNotContain("_graph?.Stop();\n        DeviceFailed?.Invoke", code.Replace("\r\n", "\n"));
         Assert.Contains("audio.callback-failed", code);
+        Assert.Contains("RemoveOutgoingConnection", code);
+        Assert.Contains("_capture?.Stop();", code);
+        Assert.Contains("_input?.Stop();", code);
+        Assert.Contains("_render.Stop();", code);
+        Assert.Contains("_render.DiscardQueuedFrames();", code);
     }
 
     [Fact]

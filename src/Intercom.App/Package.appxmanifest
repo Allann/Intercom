@@ -11,7 +11,7 @@
   <Identity
     Name="Allann.Intercom"
     Publisher="CN=Intercom Development"
-    Version="1.0.0.39" />
+    Version="1.0.0.41" />
 
   <Properties>
     <DisplayName>Intercom</DisplayName>

@@ -28,8 +28,13 @@ public sealed partial class SettingsDialog : ContentDialog
     {
         AudioLifecycleTestButton.IsEnabled = false;
         AudioLifecycleTestStatus.Text = "Starting audio lifecycle test…";
-        var progress = new Progress<int>(cycle =>
-            AudioLifecycleTestStatus.Text = $"Completed {cycle} of {AudioLifecycleSoakTest.CycleCount} cycles…");
+        var progress = new Progress<AudioLifecycleProgress>(update =>
+            AudioLifecycleTestStatus.Text =
+                $"Completed {update.CompletedCycles} of {AudioLifecycleSoakTest.CycleCount} cycles… " +
+                $"{update.Resources.PrivateMemory / 1024d / 1024d:0.0} MB private, " +
+                $"{update.Resources.ManagedMemory / 1024d / 1024d:0.0} MB managed, " +
+                $"{update.Resources.Handles} handles.\n" +
+                $"Input: {update.InputDevice}\nOutput: {update.OutputDevice}");
         try
         {
             var result = await AudioLifecycleSoakTest.RunAsync(progress);

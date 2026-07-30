@@ -81,7 +81,10 @@ public sealed class AudioGraphDevice : Intercom.Audio.IAudioDevice
             if (outputResult.Status == AudioDeviceNodeCreationStatus.Success)
             {
                 _output = outputResult.DeviceOutputNode;
-                OutputDeviceName = _output.Device?.Name ?? "Windows default communications speaker";
+                OutputDeviceName = _output.Device?.Name ??
+                    await GetDefaultDeviceNameAsync(
+                        MediaDevice.GetDefaultAudioRenderId(AudioDeviceRole.Communications),
+                        "Windows default communications speaker");
             }
             else
             {
@@ -110,7 +113,10 @@ public sealed class AudioGraphDevice : Intercom.Audio.IAudioDevice
                 if (inputResult.Status == AudioDeviceNodeCreationStatus.Success)
                 {
                     _input = inputResult.DeviceInputNode;
-                    InputDeviceName = _input.Device?.Name ?? "Windows default communications microphone";
+                    InputDeviceName = _input.Device?.Name ??
+                        await GetDefaultDeviceNameAsync(
+                            MediaDevice.GetDefaultAudioCaptureId(AudioDeviceRole.Communications),
+                            "Windows default communications microphone");
                 }
                 else
                 {
@@ -194,6 +200,13 @@ public sealed class AudioGraphDevice : Intercom.Audio.IAudioDevice
     void OnUnrecoverableError(AudioGraph sender, AudioGraphUnrecoverableErrorOccurredEventArgs args) =>
         DeviceFailed?.Invoke(new InvalidOperationException($"Audio device failed: {args.Error}."));
 
+    static async Task<string> GetDefaultDeviceNameAsync(string deviceId, string fallback)
+    {
+        if (string.IsNullOrWhiteSpace(deviceId)) return fallback;
+        try { return (await DeviceInformation.CreateFromIdAsync(deviceId))?.Name ?? fallback; }
+        catch { return fallback; }
+    }
+
     static unsafe short[] ReadSamples(AudioFrame frame, uint samplesPerQuantum)
     {
         using var buffer = frame.LockBuffer(AudioBufferAccessMode.Read);
@@ -235,6 +248,18 @@ public sealed class AudioGraphDevice : Intercom.Audio.IAudioDevice
             _graph.UnrecoverableErrorOccurred -= OnUnrecoverableError;
         }
         if (_render is not null) _render.QuantumStarted -= OnRenderQuantumStarted;
+        if (_input is not null && _capture is not null)
+            _input.RemoveOutgoingConnection(_capture);
+        if (_render is not null && _output is not null)
+            _render.RemoveOutgoingConnection(_output);
+        _capture?.Stop();
+        _input?.Stop();
+        if (_render is not null)
+        {
+            _render.Stop();
+            _render.DiscardQueuedFrames();
+        }
+        _output?.Stop();
         _capture?.Dispose();
         _render?.Dispose();
         _input?.Dispose();
