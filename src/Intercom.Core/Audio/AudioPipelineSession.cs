@@ -59,6 +59,7 @@ public sealed class AudioPipelineSession : IAsyncDisposable
     }
 
     public AudioSessionStateMachine State { get; } = new();
+    public Guid SessionId => _sessionId;
     public bool Transmitting { get { lock (_gate) return _transmitting; } }
     public AudioPipelineDiagnostics Diagnostics => new(
         _device.InputDeviceName,

@@ -55,6 +55,47 @@ public sealed class AudioSessionNegotiatorTests
     }
 
     [Fact]
+    public async Task HandsFreeModeReachesBothPeersAndEitherPeerCanEndSession()
+    {
+        var (aControl, bControl) = FakeControlTransport.Pair();
+        await using var a = new AudioSessionNegotiator(aControl, IPAddress.Loopback, () => new FakeAudioDevice(), 0);
+        await using var b = new AudioSessionNegotiator(bControl, IPAddress.Loopback, () => new FakeAudioDevice(), 0);
+        var aReady = new TaskCompletionSource<AudioInteractionMode>(TaskCreationOptions.RunContinuationsAsynchronously);
+        var bReady = new TaskCompletionSource<AudioInteractionMode>(TaskCreationOptions.RunContinuationsAsynchronously);
+        var aStopped = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var bStopped = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        a.ModeSessionReady += (_, mode) => aReady.TrySetResult(mode);
+        b.ModeSessionReady += (_, mode) => bReady.TrySetResult(mode);
+        a.SessionStopped += () => aStopped.TrySetResult();
+        b.SessionStopped += () => bStopped.TrySetResult();
+        b.IncomingOffer += (offer, id) => _ = b.AcceptAsync(offer, id, CancellationToken.None);
+
+        await a.OfferAsync(CancellationToken.None, AudioInteractionMode.HandsFree);
+
+        Assert.Equal(AudioInteractionMode.HandsFree, await aReady.Task.WaitAsync(TimeSpan.FromSeconds(2)));
+        Assert.Equal(AudioInteractionMode.HandsFree, await bReady.Task.WaitAsync(TimeSpan.FromSeconds(2)));
+        await b.StopAsync(CancellationToken.None);
+        await aStopped.Task.WaitAsync(TimeSpan.FromSeconds(2));
+        await bStopped.Task.WaitAsync(TimeSpan.FromSeconds(2));
+    }
+
+    [Fact]
+    public async Task RejectedOfferSurfacesReasonAndAllowsRetry()
+    {
+        var (aControl, bControl) = FakeControlTransport.Pair();
+        await using var a = new AudioSessionNegotiator(aControl, IPAddress.Loopback, () => new FakeAudioDevice(), 0);
+        await using var b = new AudioSessionNegotiator(bControl, IPAddress.Loopback, () => new FakeAudioDevice(), 0);
+        var failed = new TaskCompletionSource<string>(TaskCreationOptions.RunContinuationsAsynchronously);
+        a.NegotiationFailed += reason => failed.TrySetResult(reason);
+        b.IncomingOffer += (offer, id) => _ = b.RejectAsync(id, "Do Not Disturb", CancellationToken.None);
+
+        await a.OfferAsync(CancellationToken.None, AudioInteractionMode.HandsFree);
+
+        Assert.Equal("Do Not Disturb", await failed.Task.WaitAsync(TimeSpan.FromSeconds(2)));
+        await a.OfferAsync(CancellationToken.None, AudioInteractionMode.PushToTalk);
+    }
+
+    [Fact]
     public async Task RetiredFailedSession_AllowsImmediateRetry()
     {
         var (aControl, bControl) = FakeControlTransport.Pair();

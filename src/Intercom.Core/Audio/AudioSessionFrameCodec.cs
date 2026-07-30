@@ -3,12 +3,19 @@ using Intercom.ControlChannel;
 
 namespace Intercom.Audio;
 
-public sealed record AudioSessionOffer(Guid SessionId, Guid StreamId, ushort UdpPort, byte[] Key, uint NoncePrefix);
+public enum AudioInteractionMode : byte
+{
+    PushToTalk = 1,
+    HandsFree = 2,
+}
+
+public sealed record AudioSessionOffer(Guid SessionId, Guid StreamId, ushort UdpPort, byte[] Key, uint NoncePrefix, AudioInteractionMode Mode = AudioInteractionMode.PushToTalk);
 public sealed record AudioSessionAnswer(Guid SessionId, Guid StreamId, ushort UdpPort, byte[] Key, uint NoncePrefix);
 
 public static class AudioSessionFrameCodec
 {
-    const int OfferPayloadSize = 16 + 16 + 2 + 32 + 4;
+    const int SessionMaterialSize = 16 + 16 + 2 + 32 + 4;
+    const int OfferPayloadSize = SessionMaterialSize + 1;
 
     public static ControlFrame ToFrame(this AudioSessionOffer offer, Guid messageId)
     {
@@ -19,6 +26,7 @@ public static class AudioSessionFrameCodec
         BinaryPrimitives.WriteUInt16BigEndian(payload.AsSpan(32, 2), offer.UdpPort);
         offer.Key.CopyTo(payload, 34);
         BinaryPrimitives.WriteUInt32BigEndian(payload.AsSpan(66, 4), offer.NoncePrefix);
+        payload[70] = (byte)offer.Mode;
         return new ControlFrame { Type = ControlMessageType.AudioSessionOffer, MessageId = messageId, Payload = payload };
     }
 
@@ -31,13 +39,14 @@ public static class AudioSessionFrameCodec
             new Guid(frame.Payload.AsSpan(16, 16)),
             BinaryPrimitives.ReadUInt16BigEndian(frame.Payload.AsSpan(32, 2)),
             frame.Payload.AsSpan(34, 32).ToArray(),
-            BinaryPrimitives.ReadUInt32BigEndian(frame.Payload.AsSpan(66, 4)));
+            BinaryPrimitives.ReadUInt32BigEndian(frame.Payload.AsSpan(66, 4)),
+            ParseMode(frame.Payload[70]));
     }
 
     public static ControlFrame ToFrame(this AudioSessionAnswer answer, Guid offerMessageId)
     {
         if (answer.Key.Length != 32) throw new ArgumentException("Audio session key must be 32 bytes.", nameof(answer));
-        var payload = new byte[OfferPayloadSize];
+        var payload = new byte[SessionMaterialSize];
         answer.SessionId.TryWriteBytes(payload.AsSpan(0, 16));
         answer.StreamId.TryWriteBytes(payload.AsSpan(16, 16));
         BinaryPrimitives.WriteUInt16BigEndian(payload.AsSpan(32, 2), answer.UdpPort);
@@ -54,7 +63,7 @@ public static class AudioSessionFrameCodec
 
     public static AudioSessionAnswer DecodeAnswer(ControlFrame frame)
     {
-        if (frame.Type != ControlMessageType.AudioSessionAccepted || frame.Payload.Length != OfferPayloadSize)
+        if (frame.Type != ControlMessageType.AudioSessionAccepted || frame.Payload.Length != SessionMaterialSize)
             throw new MalformedFrameException("Malformed audio session answer.");
         return new AudioSessionAnswer(
             new Guid(frame.Payload.AsSpan(0, 16)),
@@ -69,5 +78,34 @@ public static class AudioSessionFrameCodec
         Type = ControlMessageType.AudioSessionStopped,
         MessageId = Guid.NewGuid(),
         Payload = sessionId.ToByteArray(),
+    };
+
+    public static Guid DecodeStopped(ControlFrame frame)
+    {
+        if (frame.Type != ControlMessageType.AudioSessionStopped || frame.Payload.Length != 16)
+            throw new MalformedFrameException("Malformed audio session stop.");
+        return new Guid(frame.Payload);
+    }
+
+    public static ControlFrame Rejected(Guid offerMessageId, string reason) => new()
+    {
+        Type = ControlMessageType.AudioSessionRejected,
+        MessageId = Guid.NewGuid(),
+        CorrelationId = offerMessageId,
+        Payload = System.Text.Encoding.UTF8.GetBytes(reason),
+    };
+
+    public static string DecodeRejection(ControlFrame frame)
+    {
+        if (frame.Type != ControlMessageType.AudioSessionRejected || frame.CorrelationId is null || frame.Payload.Length is 0 or > 256)
+            throw new MalformedFrameException("Malformed audio session rejection.");
+        return System.Text.Encoding.UTF8.GetString(frame.Payload);
+    }
+
+    static AudioInteractionMode ParseMode(byte value) => value switch
+    {
+        (byte)AudioInteractionMode.PushToTalk => AudioInteractionMode.PushToTalk,
+        (byte)AudioInteractionMode.HandsFree => AudioInteractionMode.HandsFree,
+        _ => throw new MalformedFrameException("Unknown audio interaction mode."),
     };
 }

@@ -118,6 +118,7 @@ public enum ControlMessageType : ushort
     AudioSessionOffer = 12,
     AudioSessionAccepted = 13,
     AudioSessionStopped = 14,
+    AudioSessionRejected = 15,
 }
 
 /// <summary>

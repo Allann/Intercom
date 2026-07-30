@@ -25,6 +25,7 @@
 
             <StackPanel Spacing="12" HorizontalAlignment="Stretch">
                 <InfoBar x:Name="CrashNotice" Title="Intercom closed unexpectedly last time" Message="Your settings are safe. Intercom has restarted and is available again." Severity="Warning" IsOpen="False" IsClosable="True"/>
+                <InfoBar x:Name="HotkeyNotice" Title="Push-to-talk shortcut unavailable" Severity="Warning" IsOpen="False" IsClosable="True"/>
                 <InfoBar x:Name="IncomingAttentionNotice" Title="Attention card received" Severity="Informational" IsOpen="False" IsClosable="True"/>
                 <InfoBar x:Name="UpdateNotice" Title="An update is available" Severity="Informational" IsOpen="False" IsClosable="True" CloseButtonClick="OnUpdateNoticeCloseButtonClick">
                     <InfoBar.ActionButton><Button x:Name="UpdateNoticeOpenReleaseButton" Content="View release" Click="OnUpdateNoticeOpenReleaseClick"/></InfoBar.ActionButton>

@@ -22,6 +22,7 @@ using Intercom.Updates;
 using Intercom.App.AttentionCards;
 using Intercom.App.Audio;
 using Intercom.App.Chat;
+using Intercom.App.Input;
 
 namespace Intercom.App;
 
@@ -52,6 +53,7 @@ public sealed partial class MainWindow : Window, IResidentWindow
     readonly DispatcherQueue _dispatcherQueue;
     readonly DispatcherQueueTimer _chatChimeHideTimer;
     readonly DispatcherQueueTimer _audioDiagnosticsTimer;
+    readonly GlobalPushToTalkHotkey _pushToTalkHotkey;
 
     IdentityStore? _identityStore;
     DndSettingsStore? _dndSettings;
@@ -98,6 +100,7 @@ public sealed partial class MainWindow : Window, IResidentWindow
     bool _hasGroupFloor;
     bool _handRaised;
     bool _handsFreeActive;
+    Guid? _handsFreePeerId;
     bool _pushToTalkHeld;
 
     public MainWindow()
@@ -124,6 +127,15 @@ public sealed partial class MainWindow : Window, IResidentWindow
         _audioDiagnosticsTimer = _dispatcherQueue.CreateTimer();
         _audioDiagnosticsTimer.Interval = TimeSpan.FromSeconds(1);
         _audioDiagnosticsTimer.Tick += (_, _) => RenderAudioDiagnostics();
+
+        _pushToTalkHotkey = new GlobalPushToTalkHotkey();
+        _pushToTalkHotkey.Pressed += () => _dispatcherQueue.TryEnqueue(() => _ = BeginPushToTalkAsync());
+        _pushToTalkHotkey.Released += () => _dispatcherQueue.TryEnqueue(EndPushToTalk);
+        if (!_pushToTalkHotkey.IsRegistered)
+        {
+            HotkeyNotice.Message = $"Ctrl+Alt+Space is already in use or could not be registered ({_pushToTalkHotkey.RegistrationError}). The on-screen control still works.";
+            HotkeyNotice.IsOpen = true;
+        }
 
         // ADR-0003: closing the main window hides it to the tray; only an
         // explicit tray "Quit" action actually ends the process.
@@ -304,29 +316,58 @@ public sealed partial class MainWindow : Window, IResidentWindow
         RenderVoiceControls();
     }
 
-    void OnHandsFreeClick(object sender, RoutedEventArgs e)
+    async void OnHandsFreeClick(object sender, RoutedEventArgs e)
     {
+        if (_handsFreeActive)
+        {
+            await EndHandsFreeAsync();
+            return;
+        }
         if (HandsFreeRecipientCombo.SelectedItem is not PeerChoice choice) return;
-        _handsFreeActive = !_handsFreeActive;
-        HandsFreeStatusText.Text = _handsFreeActive ? $"Hands-free with {choice.FriendlyName}" : "No hands-free session";
-        HandsFreeButton.Content = _handsFreeActive ? "End" : "Start Hands-Free";
-        HandsFreeButton.Background = _handsFreeActive ? DndRed : AvailableGreen;
-        HandsFreeRecipientCombo.IsEnabled = !_handsFreeActive;
-        RenderVoiceControls();
+        if (RemoteDndEnabled(choice.PeerId))
+        {
+            HandsFreeStatusText.Text = $"{choice.FriendlyName} is in Do Not Disturb. Use text instead.";
+            return;
+        }
+        if (!_audioNegotiators.TryGetValue(choice.PeerId, out var negotiator)) return;
+
+        HandsFreeStatusText.Text = $"Connecting hands-free with {choice.FriendlyName}…";
+        try
+        {
+            if (_audioSessions.ContainsKey(choice.PeerId)) await negotiator.StopAsync(CancellationToken.None);
+            await negotiator.OfferAsync(CancellationToken.None, AudioInteractionMode.HandsFree);
+        }
+        catch (Exception ex)
+        {
+            DiagnosticLog.Current.Error("audio.hands-free-start-failed", $"peer={choice.PeerId}", ex);
+            HandsFreeStatusText.Text = "Couldn’t start hands-free. Text is still available.";
+            UpdateMessagingEnabled();
+        }
     }
 
     void OnHandsFreeRecipientChanged(object sender, SelectionChangedEventArgs e) => UpdateMessagingEnabled();
 
     async void OnPushToTalkPressed(object sender, Microsoft.UI.Xaml.Input.PointerRoutedEventArgs e)
     {
+        PushToTalkButton.CapturePointer(e.Pointer);
+        await BeginPushToTalkAsync();
+    }
+
+    async Task BeginPushToTalkAsync()
+    {
+        if (_pushToTalkHeld || _handsFreeActive) return;
         if (HandsFreeRecipientCombo.SelectedItem is not PeerChoice choice)
         {
             DiagnosticLog.Current.Warning("audio.ptt-ignored", $"reason=no-selected-peer selectedFamilyCount={_selectedFamilyPeerIds.Count}");
             PushToTalkHint.Text = "Select one online family member first.";
             return;
         }
+        if (RemoteDndEnabled(choice.PeerId))
+        {
+            PushToTalkHint.Text = $"{choice.FriendlyName} is in Do Not Disturb. Use text instead.";
+            return;
+        }
         DiagnosticLog.Current.Info("audio.ptt-pressed", $"peer={choice.PeerId}");
-        PushToTalkButton.CapturePointer(e.Pointer);
         _pushToTalkHeld = true;
         PushToTalkButton.Content = "On Air";
         PushToTalkButton.Background = Mustard;
@@ -348,7 +389,7 @@ public sealed partial class MainWindow : Window, IResidentWindow
         PushToTalkHint.Text = "Connecting voice… keep holding to talk.";
         try
         {
-            await negotiator.OfferAsync(CancellationToken.None);
+            await negotiator.OfferAsync(CancellationToken.None, AudioInteractionMode.PushToTalk);
         }
         catch (Exception ex)
         {
@@ -360,13 +401,46 @@ public sealed partial class MainWindow : Window, IResidentWindow
 
     void OnPushToTalkReleased(object sender, Microsoft.UI.Xaml.Input.PointerRoutedEventArgs e)
     {
+        PushToTalkButton.ReleasePointerCaptures();
+        EndPushToTalk();
+    }
+
+    void EndPushToTalk()
+    {
+        if (!_pushToTalkHeld) return;
         DiagnosticLog.Current.Info("audio.ptt-released", $"selectedPeer={(HandsFreeRecipientCombo.SelectedItem as PeerChoice)?.PeerId}");
         _pushToTalkHeld = false;
-        PushToTalkButton.ReleasePointerCaptures();
         if (HandsFreeRecipientCombo.SelectedItem is PeerChoice choice
             && _audioSessions.TryGetValue(choice.PeerId, out var session))
             session.StopTransmitting();
         RenderVoiceControls();
+    }
+
+    bool RemoteDndEnabled(Guid peerId) => _presenceReceiver?.Get(peerId)?.Dnd == true;
+
+    async Task EndHandsFreeAsync()
+    {
+        var peerId = _handsFreePeerId;
+        _handsFreeActive = false;
+        _handsFreePeerId = null;
+        if (peerId is Guid id && _audioNegotiators.TryGetValue(id, out var negotiator))
+            await negotiator.StopAsync(CancellationToken.None);
+        RenderHandsFreeState();
+        RenderVoiceControls();
+        UpdateMessagingEnabled();
+    }
+
+    void RenderHandsFreeState()
+    {
+        var choice = HandsFreeRecipientCombo.ItemsSource is IEnumerable<PeerChoice> choices
+            ? choices.FirstOrDefault(item => item.PeerId == _handsFreePeerId)
+            : null;
+        HandsFreeStatusText.Text = _handsFreeActive
+            ? $"Hands-free with {choice?.FriendlyName ?? "a family member"}"
+            : "No hands-free session";
+        HandsFreeButton.Content = _handsFreeActive ? "End" : "Start Hands-Free";
+        HandsFreeButton.Background = _handsFreeActive ? DndRed : AvailableGreen;
+        HandsFreeRecipientCombo.IsEnabled = !_handsFreeActive;
     }
 
     void RenderVoiceControls()
@@ -630,7 +704,8 @@ public sealed partial class MainWindow : Window, IResidentWindow
                 () => new AudioGraphDevice());
             negotiator.IncomingOffer += (offer, messageId) =>
                 _ = AcceptIncomingAudioAsync(peer.PeerId, negotiator, offer, messageId);
-            negotiator.SessionReady += session => OnAudioSessionReady(peer.PeerId, session);
+            negotiator.ModeSessionReady += (session, mode) => OnAudioSessionReady(peer.PeerId, session, mode);
+            negotiator.SessionStopped += () => _dispatcherQueue.TryEnqueue(() => OnAudioSessionStopped(peer.PeerId));
             negotiator.NegotiationFailed += reason => _dispatcherQueue.TryEnqueue(() =>
             {
                 PushToTalkHint.Text = reason;
@@ -642,6 +717,13 @@ public sealed partial class MainWindow : Window, IResidentWindow
 
     async Task AcceptIncomingAudioAsync(Guid peerId, AudioSessionNegotiator negotiator, AudioSessionOffer offer, Guid messageId)
     {
+        if (DndPolicy.IsSuppressed(_dndSettings?.DndEnabled ?? false,
+                offer.Mode == AudioInteractionMode.HandsFree ? InteractionKind.HandsFreeRequest : InteractionKind.Voice))
+        {
+            await negotiator.RejectAsync(messageId, "That family member is in Do Not Disturb. Use text instead.", CancellationToken.None);
+            DiagnosticLog.Current.Info("audio.offer-rejected", $"peer={peerId} mode={offer.Mode} reason=dnd");
+            return;
+        }
         try
         {
             await negotiator.AcceptAsync(offer, messageId, CancellationToken.None);
@@ -652,7 +734,7 @@ public sealed partial class MainWindow : Window, IResidentWindow
         }
     }
 
-    void OnAudioSessionReady(Guid peerId, AudioPipelineSession session) => _dispatcherQueue.TryEnqueue(async () =>
+    void OnAudioSessionReady(Guid peerId, AudioPipelineSession session, AudioInteractionMode mode) => _dispatcherQueue.TryEnqueue(async () =>
     {
         if (_audioSessions.Remove(peerId, out var previous)) await previous.DisposeAsync();
         _audioSessions[peerId] = session;
@@ -668,9 +750,20 @@ public sealed partial class MainWindow : Window, IResidentWindow
         {
             await session.StartAsync();
             _audioDiagnosticsTimer.Start();
-            if (_pushToTalkHeld && HandsFreeRecipientCombo.SelectedItem is PeerChoice choice && choice.PeerId == peerId)
+            if (mode == AudioInteractionMode.HandsFree)
+            {
+                _handsFreeActive = true;
+                _handsFreePeerId = peerId;
+                SelectPeerChoice(HandsFreeRecipientCombo, peerId);
                 session.StartTransmitting();
-            PushToTalkHint.Text = session.Transmitting ? "Transmitting while held." : "Voice ready. Hold the button while you speak.";
+                RenderHandsFreeState();
+                UpdateMessagingEnabled();
+            }
+            else if (_pushToTalkHeld && HandsFreeRecipientCombo.SelectedItem is PeerChoice choice && choice.PeerId == peerId)
+                session.StartTransmitting();
+            PushToTalkHint.Text = mode == AudioInteractionMode.HandsFree
+                ? "Hands-free session active. Both sides can speak."
+                : session.Transmitting ? "Transmitting while held." : "Voice ready. Hold the button while you speak.";
         }
         catch (Exception ex)
         {
@@ -678,6 +771,20 @@ public sealed partial class MainWindow : Window, IResidentWindow
             PushToTalkHint.Text = "Microphone or speaker unavailable. Text is still available.";
         }
     });
+
+    void OnAudioSessionStopped(Guid peerId)
+    {
+        _audioSessions.Remove(peerId);
+        if (_handsFreePeerId == peerId)
+        {
+            _handsFreeActive = false;
+            _handsFreePeerId = null;
+            RenderHandsFreeState();
+            UpdateMessagingEnabled();
+        }
+        RenderVoiceControls();
+        RenderAudioDiagnostics();
+    }
 
     async Task RetireFailedAudioSessionAsync(Guid peerId, AudioPipelineSession failed)
     {
@@ -692,6 +799,7 @@ public sealed partial class MainWindow : Window, IResidentWindow
 
     public async Task StopAudioAsync()
     {
+        _pushToTalkHotkey.Dispose();
         _audioDiagnosticsTimer.Stop();
         foreach (var session in _audioSessions.Values.ToList()) await session.DisposeAsync();
         _audioSessions.Clear();

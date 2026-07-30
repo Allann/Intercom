@@ -19,6 +19,8 @@ public sealed class AudioSessionNegotiator : IAsyncDisposable
 
     public event Action<AudioSessionOffer, Guid>? IncomingOffer;
     public event Action<AudioPipelineSession>? SessionReady;
+    public event Action<AudioPipelineSession, AudioInteractionMode>? ModeSessionReady;
+    public event Action? SessionStopped;
     public event Action<string>? NegotiationFailed;
 
     public AudioSessionNegotiator(IAudioControlTransport control, IPAddress remoteAddress, Func<IAudioDevice> deviceFactory, int localUdpPort = 47812, TimeSpan? offerTimeout = null)
@@ -32,13 +34,13 @@ public sealed class AudioSessionNegotiator : IAsyncDisposable
         _control.ConnectionDropped += OnConnectionDropped;
     }
 
-    public async Task OfferAsync(CancellationToken cancellationToken)
+    public async Task OfferAsync(CancellationToken cancellationToken, AudioInteractionMode mode = AudioInteractionMode.PushToTalk)
     {
         var sessionId = Guid.NewGuid();
         var streamId = Guid.NewGuid();
         var material = AudioSessionKeyMaterial.Create();
         var receiver = new UdpAudioReceiver(_localUdpPort, material.Key, material.NoncePrefix);
-        var offer = new AudioSessionOffer(sessionId, streamId, checked((ushort)receiver.LocalPort), material.Key, material.NoncePrefix);
+        var offer = new AudioSessionOffer(sessionId, streamId, checked((ushort)receiver.LocalPort), material.Key, material.NoncePrefix, mode);
         var frame = offer.ToFrame(Guid.NewGuid());
         var timeoutCts = new CancellationTokenSource();
         var timeoutToken = timeoutCts.Token;
@@ -80,6 +82,7 @@ public sealed class AudioSessionNegotiator : IAsyncDisposable
             session = new AudioPipelineSession(remoteOffer.SessionId, localStreamId, remoteOffer.StreamId, _deviceFactory(), sender, receiver);
             lock (_gate) _active = session;
             SessionReady?.Invoke(session);
+            ModeSessionReady?.Invoke(session, remoteOffer.Mode);
             DiagnosticLog.Current.Info("audio.session-ready", $"session={remoteOffer.SessionId} role=answerer");
         }
         catch
@@ -113,7 +116,12 @@ public sealed class AudioSessionNegotiator : IAsyncDisposable
         }
         else if (frame.Type == ControlMessageType.AudioSessionStopped)
         {
-            _ = StopActiveAsync();
+            try { _ = StopActiveAsync(AudioSessionFrameCodec.DecodeStopped(frame)); }
+            catch (MalformedFrameException ex) { DiagnosticLog.Current.Warning("audio.stop-malformed", $"message={frame.MessageId}", ex); }
+        }
+        else if (frame.Type == ControlMessageType.AudioSessionRejected)
+        {
+            _ = RejectPendingAsync(frame);
         }
     }
 
@@ -136,6 +144,7 @@ public sealed class AudioSessionNegotiator : IAsyncDisposable
             var session = new AudioPipelineSession(answer.SessionId, pending.Offer.StreamId, answer.StreamId, _deviceFactory(), sender, pending.Receiver);
             lock (_gate) _active = session;
             SessionReady?.Invoke(session);
+            ModeSessionReady?.Invoke(session, pending.Offer.Mode);
             DiagnosticLog.Current.Info("audio.session-ready", $"session={answer.SessionId} role=offerer");
         }
         catch (Exception ex)
@@ -164,11 +173,48 @@ public sealed class AudioSessionNegotiator : IAsyncDisposable
 
     void OnConnectionDropped() => _ = StopActiveAsync();
 
-    async Task StopActiveAsync()
+    async Task StopActiveAsync(Guid? expectedSessionId = null)
     {
         AudioPipelineSession? session;
-        lock (_gate) { session = _active; _active = null; }
-        if (session is not null) await session.DisposeAsync().ConfigureAwait(false);
+        lock (_gate)
+        {
+            session = _active;
+            if (session is null || expectedSessionId is Guid expected && session.SessionId != expected) return;
+            _active = null;
+        }
+        if (session is not null)
+        {
+            await session.DisposeAsync().ConfigureAwait(false);
+            SessionStopped?.Invoke();
+        }
+    }
+
+    async Task RejectPendingAsync(ControlFrame frame)
+    {
+        PendingOffer? rejected;
+        lock (_gate)
+        {
+            rejected = _pending;
+            if (rejected is null || frame.CorrelationId != rejected.MessageId) return;
+            _pending = null;
+        }
+        rejected.TimeoutCts.Cancel();
+        rejected.TimeoutCts.Dispose();
+        await rejected.Receiver.DisposeAsync().ConfigureAwait(false);
+        try { NegotiationFailed?.Invoke(AudioSessionFrameCodec.DecodeRejection(frame)); }
+        catch (MalformedFrameException) { NegotiationFailed?.Invoke("The voice request was rejected."); }
+    }
+
+    public Task RejectAsync(Guid offerMessageId, string reason, CancellationToken cancellationToken) =>
+        _control.SendAsync(AudioSessionFrameCodec.Rejected(offerMessageId, reason), cancellationToken);
+
+    public async Task StopAsync(CancellationToken cancellationToken)
+    {
+        AudioPipelineSession? session;
+        lock (_gate) session = _active;
+        if (session is null) return;
+        try { await _control.SendAsync(AudioSessionFrameCodec.Stopped(session.SessionId), cancellationToken).ConfigureAwait(false); }
+        finally { await StopActiveAsync().ConfigureAwait(false); }
     }
 
     public async Task RetireAsync(AudioPipelineSession session)

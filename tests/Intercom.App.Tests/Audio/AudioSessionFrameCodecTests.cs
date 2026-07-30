@@ -9,13 +9,14 @@ public sealed class AudioSessionFrameCodecTests
     [Fact]
     public void OfferRoundTripsFreshStreamMaterial()
     {
-        var offer = new AudioSessionOffer(Guid.NewGuid(), Guid.NewGuid(), 49152, RandomNumberGenerator.GetBytes(32), 1234);
+        var offer = new AudioSessionOffer(Guid.NewGuid(), Guid.NewGuid(), 49152, RandomNumberGenerator.GetBytes(32), 1234, AudioInteractionMode.HandsFree);
         var decoded = AudioSessionFrameCodec.DecodeOffer(offer.ToFrame(Guid.NewGuid()));
         Assert.Equal(offer.SessionId, decoded.SessionId);
         Assert.Equal(offer.StreamId, decoded.StreamId);
         Assert.Equal(offer.UdpPort, decoded.UdpPort);
         Assert.Equal(offer.Key, decoded.Key);
         Assert.Equal(offer.NoncePrefix, decoded.NoncePrefix);
+        Assert.Equal(AudioInteractionMode.HandsFree, decoded.Mode);
     }
 
     [Fact]
@@ -31,5 +32,23 @@ public sealed class AudioSessionFrameCodecTests
         Assert.Equal(answer.UdpPort, decoded.UdpPort);
         Assert.Equal(answer.Key, decoded.Key);
         Assert.Equal(answer.NoncePrefix, decoded.NoncePrefix);
+    }
+
+    [Fact]
+    public void RejectionRoundTripsReasonAndCorrelation()
+    {
+        var offerMessageId = Guid.NewGuid();
+        var frame = AudioSessionFrameCodec.Rejected(offerMessageId, "Do Not Disturb");
+
+        Assert.Equal(offerMessageId, frame.CorrelationId);
+        Assert.Equal("Do Not Disturb", AudioSessionFrameCodec.DecodeRejection(frame));
+    }
+
+    [Fact]
+    public void StopRoundTripsSessionIdentity()
+    {
+        var sessionId = Guid.NewGuid();
+
+        Assert.Equal(sessionId, AudioSessionFrameCodec.DecodeStopped(AudioSessionFrameCodec.Stopped(sessionId)));
     }
 }

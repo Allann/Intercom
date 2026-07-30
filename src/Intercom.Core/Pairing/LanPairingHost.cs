@@ -453,7 +453,8 @@ sealed class LanPeerAudioControlTransport : IAudioControlTransport
     void OnFrame(Guid peerId, ControlFrame frame)
     {
         if (peerId == _peerId && frame.Type is ControlMessageType.AudioSessionOffer
-            or ControlMessageType.AudioSessionAccepted or ControlMessageType.AudioSessionStopped)
+            or ControlMessageType.AudioSessionAccepted or ControlMessageType.AudioSessionStopped
+            or ControlMessageType.AudioSessionRejected)
             FrameReceived?.Invoke(frame);
     }
 

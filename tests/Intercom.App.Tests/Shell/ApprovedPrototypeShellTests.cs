@@ -128,6 +128,32 @@ public sealed class ApprovedPrototypeShellTests
     }
 
     [Fact]
+    public void VoiceModes_UseRealSessionLifecycleAndDndGates()
+    {
+        var codeBehind = File.ReadAllText(CodeBehindPath);
+
+        Assert.Contains("AudioInteractionMode.PushToTalk", codeBehind);
+        Assert.Contains("AudioInteractionMode.HandsFree", codeBehind);
+        Assert.Contains("session.StartTransmitting();", codeBehind);
+        Assert.Contains("await negotiator.StopAsync", codeBehind);
+        Assert.Contains("DndPolicy.IsSuppressed", codeBehind);
+        Assert.Contains("RemoteDndEnabled", codeBehind);
+    }
+
+    [Fact]
+    public void GlobalPushToTalk_RegistersConflictVisibleHoldReleaseListener()
+    {
+        var inputPath = Path.GetFullPath(Path.Combine(Path.GetDirectoryName(XamlPath)!, "Input", "GlobalPushToTalkHotkey.cs"));
+        var input = File.ReadAllText(inputPath);
+        var xaml = File.ReadAllText(XamlPath);
+
+        Assert.Contains("RegisterHotKey", input);
+        Assert.Contains("GetAsyncKeyState", input);
+        Assert.Contains("RegistrationError", input);
+        Assert.Contains("x:Name=\"HotkeyNotice\"", xaml);
+    }
+
+    [Fact]
     public void AudioFrames_QueryPrivateMemoryBufferComInterface()
     {
         var path = Path.GetFullPath(Path.Combine(Path.GetDirectoryName(XamlPath)!, "Audio", "AudioGraphDevice.cs"));
