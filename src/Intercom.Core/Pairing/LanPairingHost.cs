@@ -79,6 +79,40 @@ public sealed class LanPairingHost : IAsyncDisposable
         }
     }
 
+    /// <summary>Starts the ordinary pairing ceremony from a manually entered
+    /// endpoint. Unlike LAN discovery, the endpoint supplies no identity
+    /// claims: peer ID and SPKI are learned from the mutually-authenticated
+    /// connection and then verified by the shared SAS ceremony.</summary>
+    public async Task ConnectManualAsync(ManualPeerEndpoint endpoint, CancellationToken cancellationToken)
+    {
+        Guid remotePeerId = Guid.Empty;
+        try
+        {
+            var resolved = await endpoint.ResolveAsync(cancellationToken).ConfigureAwait(false);
+            var connection = await _connector.ConnectAsync(resolved, cancellationToken).ConfigureAwait(false);
+            var remoteSpki = SpkiHash.Compute(connection.RemoteCertificate);
+            var localNonce = PairingNonce.Generate();
+            await connection.SendAsync(new PairingNonceMessage
+            {
+                Nonce = localNonce,
+                PeerId = _identityStore.Identity.PeerId,
+                ProtocolVersion = Hello.CurrentProtocolVersion,
+                Intent = PairingIntent.Pair,
+            }.ToFrame(Guid.NewGuid()), cancellationToken).ConfigureAwait(false);
+
+            var firstFrame = await connection.ReceiveAsync(cancellationToken).ConfigureAwait(false)
+                ?? throw new InvalidOperationException("The peer closed the connection before pairing began.");
+            remotePeerId = PairingFrameCodec.DecodeNonce(firstFrame).PeerId;
+            await BeginAsync(connection, remotePeerId, remoteSpki, cancellationToken, firstFrame,
+                localNonce, sendLocalNonce: false, manualEndpoint: endpoint).ConfigureAwait(false);
+        }
+        catch (Exception ex)
+        {
+            DiagnosticLog.Current.Error("pairing.manual-connect-failed", $"peer={remotePeerId} endpoint={endpoint}", ex);
+            PairingFailed?.Invoke(remotePeerId, new InvalidOperationException($"Can’t reach this peer at the saved address ({endpoint}). {ex.Message}", ex));
+        }
+    }
+
     public async Task ConnectApprovedAsync(IPEndPoint endpoint, ApprovedPeer peer, CancellationToken cancellationToken)
     {
         if (peer.Revoked || peer.SpkiSha256 is not { } expectedSpki) return;
@@ -106,6 +140,25 @@ public sealed class LanPairingHost : IAsyncDisposable
         finally
         {
             lock (_gate) { _connecting.Remove(peer.PeerId); }
+        }
+    }
+
+    public async Task ConnectApprovedAsync(ManualPeerEndpoint endpoint, ApprovedPeer peer, CancellationToken cancellationToken)
+    {
+        try
+        {
+            var resolved = await endpoint.ResolveAsync(cancellationToken).ConfigureAwait(false);
+            await ConnectApprovedAsync(resolved, peer, cancellationToken).ConfigureAwait(false);
+            if (ConnectedPeerIds.Contains(peer.PeerId))
+                _identityStore.UpdateLastKnownEndpoint(peer.PeerId, endpoint.Host, endpoint.Port);
+            else
+                PairingFailed?.Invoke(peer.PeerId,
+                    new InvalidOperationException($"Can’t reach this peer at the saved address ({endpoint}). The pairing is still approved; enter a new address and try again."));
+        }
+        catch (Exception ex)
+        {
+            DiagnosticLog.Current.Error("peer.manual-reconnect-failed", $"peer={peer.PeerId} endpoint={endpoint}", ex);
+            PairingFailed?.Invoke(peer.PeerId, new InvalidOperationException($"Can’t reach this peer at the saved address ({endpoint}). {ex.Message}", ex));
         }
     }
 
@@ -139,7 +192,8 @@ public sealed class LanPairingHost : IAsyncDisposable
         }
     }
 
-    async Task BeginAsync(IPeerTransportConnection connection, Guid remotePeerId, SpkiPin remoteSpki, CancellationToken cancellationToken, ControlFrame? firstFrame = null)
+    async Task BeginAsync(IPeerTransportConnection connection, Guid remotePeerId, SpkiPin remoteSpki, CancellationToken cancellationToken, ControlFrame? firstFrame = null,
+        PairingNonce? localNonce = null, bool sendLocalNonce = true, ManualPeerEndpoint? manualEndpoint = null)
     {
         if (!_identityStore.StartPairing(remotePeerId, DateTimeOffset.UtcNow))
         {
@@ -156,7 +210,8 @@ public sealed class LanPairingHost : IAsyncDisposable
             remoteSpki,
             remotePeerId,
             connection.RemoteCertificate.RawData,
-            DateTimeOffset.UtcNow);
+            DateTimeOffset.UtcNow,
+            localNonce: localNonce);
 
         lock (_gate)
         {
@@ -175,6 +230,8 @@ public sealed class LanPairingHost : IAsyncDisposable
         };
         ceremony.Approved += peer =>
         {
+            if (manualEndpoint is not null)
+                _identityStore.UpdateLastKnownEndpoint(peer.PeerId, manualEndpoint.Host, manualEndpoint.Port);
             DiagnosticLog.Current.Info("pairing.approved", $"peer={peer.PeerId}");
             PromotePairingConnection(peer.PeerId, transport);
             Approved?.Invoke(peer);
@@ -183,7 +240,7 @@ public sealed class LanPairingHost : IAsyncDisposable
         ceremony.Expired += () => Remove(remotePeerId);
 
         transport.Start();
-        await ceremony.StartAsync(cancellationToken).ConfigureAwait(false);
+        if (sendLocalNonce) await ceremony.StartAsync(cancellationToken).ConfigureAwait(false);
     }
 
     void PromotePairingConnection(Guid peerId, TlsPairingTransport transport)

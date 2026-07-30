@@ -15,6 +15,32 @@ public sealed class LanPairingHostTests : IDisposable
     readonly string _root = Path.Combine(Path.GetTempPath(), "IntercomLanPairingTests_" + Guid.NewGuid());
 
     [Fact]
+    public async Task ManualHostname_UsesSamePairingCeremony_AndPersistsHostname()
+    {
+        var aStore = Store("manual-a");
+        var bStore = Store("manual-b");
+        var port = FreePort();
+        await using var a = new LanPairingHost(aStore, port, _ => null);
+        await using var b = new LanPairingHost(bStore, port + 1, _ => null);
+        var aCode = new TaskCompletionSource<string>(TaskCreationOptions.RunContinuationsAsynchronously);
+        var bCode = new TaskCompletionSource<string>(TaskCreationOptions.RunContinuationsAsynchronously);
+        a.PairingCodeReady += (_, code) => aCode.TrySetResult(code);
+        b.PairingCodeReady += (_, code) => bCode.TrySetResult(code);
+        a.Start();
+        b.Start();
+
+        await a.ConnectManualAsync(new ManualPeerEndpoint("localhost", port + 1), CancellationToken.None);
+        Assert.Equal(await aCode.Task.WaitAsync(TimeSpan.FromSeconds(5)), await bCode.Task.WaitAsync(TimeSpan.FromSeconds(5)));
+        await a.ConfirmAsync(bStore.Identity.PeerId, "VPN PC", CancellationToken.None);
+        await b.ConfirmAsync(aStore.Identity.PeerId, "PC A", CancellationToken.None);
+        await WaitUntilAsync(() => aStore.ApprovedPeers.SingleOrDefault()?.LastKnownAddress == "localhost");
+
+        Assert.Equal("localhost", aStore.ApprovedPeers[0].LastKnownAddress);
+        Assert.Equal(port + 1, aStore.ApprovedPeers[0].LastKnownPort);
+        Assert.Equal(bStore.Identity.SpkiSha256, aStore.ApprovedPeers[0].SpkiSha256);
+    }
+
+    [Fact]
     public async Task TwoRealTlsHosts_ShowSameCode_AndBothPersistApproval()
     {
         var aStore = Store("a");

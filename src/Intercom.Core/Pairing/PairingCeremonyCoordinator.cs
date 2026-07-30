@@ -38,7 +38,7 @@ public sealed class PairingCeremonyCoordinator
     readonly SpkiPin _remoteSpki;
     readonly Guid _remotePeerIdHint;
     readonly byte[] _remoteCertificate;
-    readonly PairingNonce _localNonce = PairingNonce.Generate();
+    readonly PairingNonce _localNonce;
     readonly DateTimeOffset _startedAt;
     readonly Func<DateTimeOffset> _clock;
 
@@ -77,7 +77,8 @@ public sealed class PairingCeremonyCoordinator
         Guid remotePeerIdHint,
         byte[] remoteCertificate,
         DateTimeOffset startedAt,
-        Func<DateTimeOffset>? clock = null)
+        Func<DateTimeOffset>? clock = null,
+        PairingNonce? localNonce = null)
     {
         _transport = transport;
         _identityStore = identityStore;
@@ -88,6 +89,7 @@ public sealed class PairingCeremonyCoordinator
         _remoteCertificate = remoteCertificate;
         _startedAt = startedAt;
         _clock = clock ?? (() => DateTimeOffset.UtcNow);
+        _localNonce = localNonce ?? PairingNonce.Generate();
 
         _transport.FrameReceived += OnFrameReceived;
     }
