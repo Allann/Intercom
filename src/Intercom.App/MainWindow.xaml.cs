@@ -47,6 +47,7 @@ public sealed partial class MainWindow : Window, IResidentWindow
 
     public event Action? QuitRequested;
     public event Action<VisiblePeer>? PairingRequested;
+    public event Action<ManualPeerEndpoint, ApprovedPeer?>? ManualPeerRequested;
 
     public nint Hwnd { get; }
     public AppWindow AppWin { get; }
@@ -277,13 +278,31 @@ public sealed partial class MainWindow : Window, IResidentWindow
             return;
         }
 
-        await new ContentDialog
+        var address = new TextBox { PlaceholderText = "IP address or hostname", MinWidth = 300 };
+        var existingPeer = new ComboBox { PlaceholderText = "Pair a new peer", MinWidth = 300 };
+        existingPeer.Items.Add(new ComboBoxItem { Content = "Pair a new peer" });
+        foreach (var peer in (_identityStore?.ApprovedPeers ?? []).Where(peer => !peer.Revoked))
+            existingPeer.Items.Add(new ComboBoxItem { Content = $"Update {peer.FriendlyName}", Tag = peer });
+        existingPeer.SelectedIndex = 0;
+        var content = new StackPanel { Spacing = 8 };
+        content.Children.Add(new TextBlock { Text = "Enter a VPN address. Choose an approved peer to correct its address without pairing again." });
+        content.Children.Add(address);
+        content.Children.Add(existingPeer);
+        var dialog = new ContentDialog
         {
-            Title = "Add Family Member",
-            Content = "Open Intercom on the other PC. It will appear here automatically when both PCs are on the same private network.",
-            CloseButtonText = "Done",
+            Title = "Add a VPN peer",
+            Content = content,
+            PrimaryButtonText = "Connect",
+            CloseButtonText = "Cancel",
             XamlRoot = Content.XamlRoot,
-        }.ShowAsync();
+        };
+        if (await dialog.ShowAsync() != ContentDialogResult.Primary) return;
+        try
+        {
+            var approvedPeer = (existingPeer.SelectedItem as ComboBoxItem)?.Tag as ApprovedPeer;
+            ManualPeerRequested?.Invoke(ManualPeerEndpoint.Parse(address.Text, 47811), approvedPeer);
+        }
+        catch (FormatException ex) { ShowPairingFailed(ex.Message); }
     }
 
     async void OnRaiseHandClick(object sender, RoutedEventArgs e)

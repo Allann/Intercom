@@ -230,14 +230,17 @@ public sealed class IdentityStore
     }
 
     public bool UpdateLastKnownEndpoint(Guid peerId, IPAddress address, int port)
+        => UpdateLastKnownEndpoint(peerId, address?.ToString() ?? throw new ArgumentNullException(nameof(address)), port);
+
+    public bool UpdateLastKnownEndpoint(Guid peerId, string host, int port)
     {
-        ArgumentNullException.ThrowIfNull(address);
+        ArgumentException.ThrowIfNullOrWhiteSpace(host);
         if (port is < 1 or > 65535) throw new ArgumentOutOfRangeException(nameof(port));
         lock (_gate)
         {
             var peer = _registry.Peers.FirstOrDefault(p => p.PeerId == peerId && !p.Revoked);
             if (peer is null) return false;
-            var value = address.ToString();
+            var value = host.Trim();
             if (peer.LastKnownAddress == value && peer.LastKnownPort == port) return true;
             peer.LastKnownAddress = value;
             peer.LastKnownPort = port;

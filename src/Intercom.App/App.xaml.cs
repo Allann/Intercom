@@ -128,6 +128,7 @@ public partial class App : Application
 
         _mainWindow?.AttachIdentityStore(_lifecycle.IdentityStore);
         if (_mainWindow is not null) _mainWindow.PairingRequested += OnPairingRequested;
+        if (_mainWindow is not null) _mainWindow.ManualPeerRequested += OnManualPeerRequested;
 
         StartPairingHost();
         StartLanDiscoveryProbe();
@@ -345,6 +346,16 @@ public partial class App : Application
             CancellationToken.None);
     }
 
+    void OnManualPeerRequested(ManualPeerEndpoint endpoint, ApprovedPeer? approvedPeer)
+    {
+        if (_pairingHost is null) return;
+        DiagnosticLog.Current.Info("ui.manual-peer-requested", $"peer={approvedPeer?.PeerId} endpoint={endpoint}");
+        if (approvedPeer is null)
+            _ = _pairingHost.ConnectManualAsync(endpoint, CancellationToken.None);
+        else
+            _ = _pairingHost.ConnectApprovedAsync(endpoint, approvedPeer, CancellationToken.None);
+    }
+
     void OnPairingCodeReady(Guid peerId, string code) => _uiDispatcherQueue?.TryEnqueue(() =>
         _mainWindow?.ShowPairingCode(
             peerId,
@@ -396,10 +407,9 @@ public partial class App : Application
         foreach (var approved in _lifecycle.IdentityStore.ApprovedPeers.Where(peer =>
                      !peer.Revoked && peer.SpkiSha256 is not null &&
                      peer.LastKnownPort is > 0 and <= 65535 &&
-                     System.Net.IPAddress.TryParse(peer.LastKnownAddress, out _)))
+                     !string.IsNullOrWhiteSpace(peer.LastKnownAddress)))
         {
-            var address = System.Net.IPAddress.Parse(approved.LastKnownAddress!);
-            var endpoint = new System.Net.IPEndPoint(address, approved.LastKnownPort!.Value);
+            var endpoint = new ManualPeerEndpoint(approved.LastKnownAddress!, approved.LastKnownPort!.Value);
             DiagnosticLog.Current.Info("peer.reconnect-remembered", $"peer={approved.PeerId} endpoint={endpoint}");
             _ = _pairingHost.ConnectApprovedAsync(endpoint, approved, CancellationToken.None);
         }
@@ -425,6 +435,7 @@ public partial class App : Application
             _discoveryService.Dispose();
         }
         if (_mainWindow is not null) _mainWindow.PairingRequested -= OnPairingRequested;
+        if (_mainWindow is not null) _mainWindow.ManualPeerRequested -= OnManualPeerRequested;
         if (_pairingHost is not null)
         {
             _pairingHost.PairingCodeReady -= OnPairingCodeReady;
