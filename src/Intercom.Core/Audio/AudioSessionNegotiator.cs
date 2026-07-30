@@ -68,6 +68,8 @@ public sealed class AudioSessionNegotiator : IAsyncDisposable
     public async Task AcceptAsync(AudioSessionOffer remoteOffer, Guid offerMessageId, CancellationToken cancellationToken)
     {
         DiagnosticLog.Current.Info("audio.offer-accepting", $"session={remoteOffer.SessionId} message={offerMessageId} remoteUdpPort={remoteOffer.UdpPort}");
+        await StopActiveAsync().ConfigureAwait(false);
+        cancellationToken.ThrowIfCancellationRequested();
         var material = AudioSessionKeyMaterial.Create();
         var localStreamId = Guid.NewGuid();
         var receiver = new UdpAudioReceiver(_localUdpPort, material.Key, material.NoncePrefix);

@@ -128,6 +128,29 @@ public sealed class AudioSessionNegotiatorTests
         Assert.Equal(port, rebound.LocalPort);
     }
 
+    [Fact]
+    public async Task IncomingReplacement_RetiresActiveSessionBeforeRebindingFixedPort()
+    {
+        var port = ReserveAvailableUdpPort();
+        var control = new RecordingControlTransport();
+        await using var negotiator = new AudioSessionNegotiator(
+            control, IPAddress.Loopback, () => new FakeAudioDevice(), port);
+        var firstMaterial = AudioSessionKeyMaterial.Create();
+        var secondMaterial = AudioSessionKeyMaterial.Create();
+
+        await negotiator.AcceptAsync(
+            new AudioSessionOffer(Guid.NewGuid(), Guid.NewGuid(), 12345, firstMaterial.Key, firstMaterial.NoncePrefix),
+            Guid.NewGuid(),
+            CancellationToken.None);
+
+        await negotiator.AcceptAsync(
+            new AudioSessionOffer(Guid.NewGuid(), Guid.NewGuid(), 12346, secondMaterial.Key, secondMaterial.NoncePrefix),
+            Guid.NewGuid(),
+            CancellationToken.None);
+
+        Assert.Equal(2, control.Sent.Count);
+    }
+
     static int ReserveAvailableUdpPort()
     {
         using var udp = new UdpClient(AddressFamily.InterNetworkV6);
@@ -180,5 +203,17 @@ public sealed class AudioSessionNegotiatorTests
         public event Action? ConnectionDropped { add { } remove { } }
         public Task SendAsync(ControlFrame frame, CancellationToken cancellationToken) =>
             throw new InvalidOperationException("Simulated control send failure.");
+    }
+
+    sealed class RecordingControlTransport : IAudioControlTransport
+    {
+        public List<ControlFrame> Sent { get; } = [];
+        public event Action<ControlFrame>? FrameReceived { add { } remove { } }
+        public event Action? ConnectionDropped { add { } remove { } }
+        public Task SendAsync(ControlFrame frame, CancellationToken cancellationToken)
+        {
+            Sent.Add(frame);
+            return Task.CompletedTask;
+        }
     }
 }
