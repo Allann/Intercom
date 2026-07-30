@@ -35,7 +35,9 @@ static class MeasurementReport
     public static string Create(string senderPath, string receiverPath, string profile)
     {
         var sender = Read(senderPath).Where(e => e.Text("profile") == profile).ToList();
-        var receiver = Read(receiverPath).Where(e => e.Text("profile") == profile).ToList();
+        var sessionIds = sender.Where(e => e.Name == "audio.measurement-talk-start")
+            .Select(e => e.Text("session")).ToHashSet();
+        var receiver = Read(receiverPath).Where(e => sessionIds.Contains(e.Text("session"))).ToList();
         var starts = sender.Where(e => e.Name == "audio.measurement-talk-start").ToList();
         var frames = receiver.Where(e => e.Name == "audio.measurement-frame-to-speaker-queue").ToList();
         var releases = receiver.Where(e => e.Name == "audio.measurement-release-to-speaker-queue").ToList();
@@ -50,9 +52,17 @@ static class MeasurementReport
                 ? first.Long("observedUnixMs") - source
                 : (long?)null;
         }).Where(value => value.HasValue).Select(value => value!.Value).ToList();
+        var firstReceived = receiver.Where(e => e.Name == "audio.measurement-first-received").ToList();
+        var arrivalToQueue = firstReceived.Select(received =>
+        {
+            var played = frames.FirstOrDefault(frame => frame.Text("session") == received.Text("session")
+                && frame.Long("sequence") == received.Long("sequence"));
+            return played is null ? (long?)null : played.Long("observedUnixMs") - received.Long("observedUnixMs");
+        }).Where(value => value.HasValue).Select(value => value!.Value).ToList();
+        var clockReliable = latencies.Count > 0 && Percentile(latencies.Order().ToArray(), 0.5) is >= 0 and <= 2000;
         var maxTarget = receiver.Select(e => e.Long("targetFrames")).DefaultIfEmpty(0).Max();
-        var concealed = receiver.Select(e => e.Long("concealed")).DefaultIfEmpty(0).Max();
-        var discarded = receiver.Select(e => e.Long("discarded")).DefaultIfEmpty(0).Max();
+        var concealed = SessionCounterTotal(receiver, "concealed");
+        var discarded = SessionCounterTotal(receiver, "discarded");
 
         return $"""
             # Intercom two-PC audio measurement
@@ -65,16 +75,18 @@ static class MeasurementReport
             | Talk spurts | {starts.Count} |
             | Audio frames measured | {frames.Count} |
             | Deliberately dropped frames | {dropped} |
-            | Press to first speaker queue | {Summary(pressLatencies)} |
-            | Steady-state capture to speaker queue | {Summary(latencies)} |
-            | Release to speaker queue drained | {Summary(releaseLatencies)} |
+            | Press to first speaker queue | {(clockReliable ? Summary(pressLatencies) : "invalid: PC clocks are not sufficiently aligned")} |
+            | Steady-state capture to speaker queue | {(clockReliable ? Summary(latencies) : "invalid: PC clocks are not sufficiently aligned")} |
+            | Release to speaker queue drained | {(clockReliable ? Summary(releaseLatencies) : "invalid: PC clocks are not sufficiently aligned")} |
+            | Receiver packet-arrival to speaker queue | {Summary(arrivalToQueue)} |
+            | Cross-PC timing variation (p95-p5) | {Spread(latencies)} |
             | Maximum jitter target | {maxTarget} frames ({maxTarget * AudioFormat.FrameMilliseconds} ms) |
             | Concealed frames | {concealed} |
             | Discarded frames | {discarded} |
 
             ## Interpretation
 
-            Times use UTC timestamps carried inside the real encrypted audio packets. Keep both PCs synchronised with Windows Time; clock offset is included in cross-PC latency. “Speaker queue” is the software render boundary and does not claim to detect the physical instant a loudspeaker becomes audible.
+            Times use UTC timestamps carried inside the real encrypted audio packets. Keep both PCs synchronised with Windows Time; clock offset is included in cross-PC latency. Absolute cross-PC values are rejected when their median is negative or implausibly high. Receiver arrival-to-queue delay and timing variation remain useful with a fixed clock offset. “Speaker queue” is the software render boundary and does not claim to detect the physical instant a loudspeaker becomes audible.
 
             ## Inputs
 
@@ -92,7 +104,24 @@ static class MeasurementReport
 
     static long Percentile(long[] ordered, double percentile) => ordered[(int)Math.Ceiling((ordered.Length - 1) * percentile)];
 
-    static List<Event> Read(string path) => File.ReadLines(path).Select(Parse).Where(e => e is not null).Cast<Event>().ToList();
+    static string Spread(IReadOnlyList<long> values)
+    {
+        if (values.Count < 2) return "no samples";
+        var ordered = values.Order().ToArray();
+        return $"{Percentile(ordered, 0.95) - Percentile(ordered, 0.05)} ms";
+    }
+
+    static long SessionCounterTotal(IEnumerable<Event> events, string field) => events
+        .GroupBy(e => e.Text("session"))
+        .Sum(group => group.Select(e => e.Long(field)).DefaultIfEmpty(0).Max());
+
+    static List<Event> Read(string path)
+    {
+        var files = Directory.Exists(path)
+            ? Directory.GetFiles(path, "intercom*.log")
+            : [path];
+        return files.SelectMany(File.ReadLines).Select(Parse).Where(e => e is not null).Cast<Event>().ToList();
+    }
 
     static Event? Parse(string line)
     {

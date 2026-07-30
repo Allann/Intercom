@@ -17,7 +17,8 @@ becomes audible.
 6. Set the profile back to **Disabled (normal audio)** when finished.
 7. Copy `%LOCALAPPDATA%\Intercom\logs\intercom.log` from each PC to one machine.
 
-Generate the report from the repository root:
+Generate the report from the repository root. Each input may be one log file or
+a directory containing its rolled `intercom*.log` files:
 
 ```powershell
 dotnet run --project tools\Intercom.AudioMeasurement -- `
