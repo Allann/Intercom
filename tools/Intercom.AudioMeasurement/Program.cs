@@ -34,10 +34,14 @@ static class MeasurementReport
 
     public static string Create(string senderPath, string receiverPath, string profile)
     {
-        var sender = Read(senderPath).Where(e => e.Text("profile") == profile).ToList();
-        var sessionIds = sender.Where(e => e.Name == "audio.measurement-talk-start")
+        var allSender = Read(senderPath);
+        var allReceiver = Read(receiverPath);
+        var receiverSessionIds = allReceiver.Select(e => e.Text("session")).Where(value => value.Length > 0).ToHashSet();
+        var sessionIds = allSender.Where(e => e.Name == "audio.measurement-talk-start"
+                && e.Text("profile") == profile && receiverSessionIds.Contains(e.Text("session")))
             .Select(e => e.Text("session")).ToHashSet();
-        var receiver = Read(receiverPath).Where(e => sessionIds.Contains(e.Text("session"))).ToList();
+        var sender = allSender.Where(e => sessionIds.Contains(e.Text("session"))).ToList();
+        var receiver = allReceiver.Where(e => sessionIds.Contains(e.Text("session"))).ToList();
         var starts = sender.Where(e => e.Name == "audio.measurement-talk-start").ToList();
         var frames = receiver.Where(e => e.Name == "audio.measurement-frame-to-speaker-queue").ToList();
         var releases = receiver.Where(e => e.Name == "audio.measurement-release-to-speaker-queue").ToList();
