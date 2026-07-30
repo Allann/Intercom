@@ -74,6 +74,22 @@ public sealed class AudioPipelineLoopbackTests
         Assert.True(await device.Played.Reader.WaitToReadAsync().AsTask().WaitAsync(TimeSpan.FromSeconds(1)));
     }
 
+    [Fact]
+    public async Task PushToTalkRelease_DoesNotConcealNormalSilence()
+    {
+        var device = new LoopbackDevice();
+        await using var loopback = await StartLoopbackAsync(device);
+        loopback.StartTransmitting();
+        for (var i = 0; i < 4; i++) device.Emit(new short[AudioFormat.SamplesPerFrame]);
+        await device.Played.Reader.ReadAsync().AsTask().WaitAsync(TimeSpan.FromSeconds(2));
+
+        loopback.StopTransmitting();
+        await Task.Delay(TimeSpan.FromMilliseconds(
+            AudioFormat.FrameMilliseconds * (AdaptiveJitterBuffer.IdleConcealmentLimit + 2)));
+
+        Assert.Equal(0, loopback.Diagnostics.ConcealedFrames);
+    }
+
     static async Task<short[]> ReadAudibleAsync(LoopbackDevice device)
     {
         using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(2));

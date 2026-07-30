@@ -84,6 +84,20 @@ public sealed class AdaptiveJitterBuffer
         else if (concealedCount == 0 && TargetFrames > MinTargetFrames) TargetFrames--;
     }
 
+    /// <summary>Stops the current sequence clock at an explicit sender
+    /// boundary. Buffered frames are retained because the next talkspurt may
+    /// already have arrived while the end marker was waiting for playout.</summary>
+    public void EndTalkspurt()
+    {
+        lock (_gate)
+        {
+            _started = false;
+            _consecutiveMissing = 0;
+            _recentConcealment.Clear();
+            TargetFrames = InitialTargetFrames;
+        }
+    }
+
     public void Reset()
     {
         lock (_gate)

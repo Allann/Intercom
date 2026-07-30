@@ -45,4 +45,27 @@ public sealed class AdaptiveJitterBufferTests
         Assert.True(buffer.Add(Frame(5)));
         Assert.Equal((ulong)3, buffer.Read().Frame!.Sequence);
     }
+
+    [Fact]
+    public void EndTalkspurt_StopsConcealmentImmediately_AndPreservesNextBurstFrames()
+    {
+        var buffer = new AdaptiveJitterBuffer();
+        buffer.Add(Frame(0));
+        buffer.Add(Frame(1));
+        buffer.Add(new JitterFrame(2, 0, [], AudioPacketFlags.EndOfTalkspurt));
+        buffer.Add(Frame(3));
+        buffer.Add(Frame(4));
+
+        Assert.Equal((ulong)0, buffer.Read().Frame!.Sequence);
+        Assert.Equal((ulong)1, buffer.Read().Frame!.Sequence);
+        Assert.Equal(AudioPacketFlags.EndOfTalkspurt, buffer.Read().Frame!.Flags);
+        buffer.EndTalkspurt();
+
+        for (var i = 0; i < AdaptiveJitterBuffer.IdleConcealmentLimit; i++)
+            Assert.False(buffer.Read().Conceal);
+        Assert.Equal(0, buffer.ConcealedFrames);
+
+        buffer.Add(Frame(5));
+        Assert.Equal((ulong)3, buffer.Read().Frame!.Sequence);
+    }
 }

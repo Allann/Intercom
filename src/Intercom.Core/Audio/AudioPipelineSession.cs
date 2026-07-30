@@ -214,6 +214,7 @@ public sealed class AudioPipelineSession : IAsyncDisposable
                 if (next.Frame is { Flags: AudioPacketFlags.EndOfTalkspurt } marker)
                 {
                     _receiveTalkspurtActive = false;
+                    _jitter.EndTalkspurt();
                     if (MeasurementEnabled) LogMeasuredLatency("audio.measurement-release-to-speaker-queue", new AudioPacket
                     {
                         SessionId = _sessionId, StreamId = _receiveStreamId, Sequence = marker.Sequence,
