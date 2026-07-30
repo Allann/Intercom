@@ -167,6 +167,17 @@ public sealed class ApprovedPrototypeShellTests
     }
 
     [Fact]
+    public void RemotePresenceChanges_RefreshTheFamilyRosterAndShowDnd()
+    {
+        var codeBehind = File.ReadAllText(CodeBehindPath);
+
+        Assert.Contains("presenceReceiver.LeaseAccepted += OnRemotePresenceChanged", codeBehind);
+        Assert.Contains("void OnRemotePresenceChanged", codeBehind);
+        Assert.Contains("Do Not Disturb", codeBehind);
+        Assert.Contains("RemotePresenceLabel", codeBehind);
+    }
+
+    [Fact]
     public void GlobalPushToTalk_RegistersConflictVisibleHoldReleaseListener()
     {
         var inputPath = Path.GetFullPath(Path.Combine(Path.GetDirectoryName(XamlPath)!, "Input", "GlobalPushToTalkHotkey.cs"));

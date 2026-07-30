@@ -232,7 +232,7 @@ public sealed partial class MainWindow : Window, IResidentWindow
             row.ColumnDefinitions.Add(new ColumnDefinition { Width = GridLength.Auto });
             var member = new Microsoft.UI.Xaml.Controls.Primitives.ToggleButton
             {
-                Content = $"✓ {approved.FriendlyName} · {(online ? "online" : "offline")}",
+                Content = $"✓ {approved.FriendlyName} · {RemotePresenceLabel(approved.PeerId, online)}",
                 HorizontalAlignment = HorizontalAlignment.Stretch,
                 HorizontalContentAlignment = HorizontalAlignment.Center,
                 IsEnabled = online,
@@ -769,6 +769,25 @@ public sealed partial class MainWindow : Window, IResidentWindow
         _contactStore = contactStore;
         _manualOverrideStore = manualOverrideStore;
         _presenceReceiver = presenceReceiver;
+        presenceReceiver.LeaseAccepted += OnRemotePresenceChanged;
+    }
+
+    void OnRemotePresenceChanged(TrackedDevicePresence presence) => _dispatcherQueue.TryEnqueue(() =>
+    {
+        UpdateDiscoveredPeers(_lastDiscoveredPeers);
+    });
+
+    string RemotePresenceLabel(Guid peerId, bool connected)
+    {
+        if (!connected) return "offline";
+        var presence = _presenceReceiver?.Get(peerId);
+        if (presence?.Dnd == true) return "online · Do Not Disturb";
+        return presence?.Availability switch
+        {
+            AvailabilityState.Idle => "online · idle",
+            AvailabilityState.Unavailable => "online · unavailable",
+            _ => "online · available",
+        };
     }
 
     void OnToggleDndClick(object sender, RoutedEventArgs e) => _dndSettings?.Toggle();
@@ -836,8 +855,12 @@ public sealed partial class MainWindow : Window, IResidentWindow
                 _attentionCardRouters.Clear();
             }
         }
-        var choices = peers.Select(peer => new PeerChoice(peer.PeerId, peer.FriendlyName,
-            $"{peer.FriendlyName} ({(_peerHost.ConnectedPeerIds.Contains(peer.PeerId) ? "online" : "offline")})")).ToList();
+        var choices = peers.Select(peer =>
+        {
+            var online = _peerHost.ConnectedPeerIds.Contains(peer.PeerId);
+            return new PeerChoice(peer.PeerId, peer.FriendlyName,
+                $"{peer.FriendlyName} ({RemotePresenceLabel(peer.PeerId, online)})");
+        }).ToList();
         _refreshingPeerChoices = true;
         ChatRecipientCombo.ItemsSource = choices;
         ComposerRecipientCombo.ItemsSource = choices.ToList();
