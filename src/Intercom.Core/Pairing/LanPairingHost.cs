@@ -5,6 +5,7 @@ using Intercom.Identity;
 using Intercom.Chat;
 using Intercom.AttentionCards;
 using Intercom.Audio;
+using Intercom.GroupVoice;
 
 namespace Intercom.Pairing;
 
@@ -294,6 +295,7 @@ public sealed class LanPairingHost : IAsyncDisposable
     public IChatTransport CreateChatTransport(Guid peerId) => new LanPeerChatTransport(this, peerId);
     public IAttentionCardTransport CreateAttentionCardTransport(Guid peerId) => new LanPeerAttentionCardTransport(this, peerId);
     public IAudioControlTransport CreateAudioControlTransport(Guid peerId) => new LanPeerAudioControlTransport(this, peerId);
+    public IGroupFloorTransport CreateGroupFloorTransport() => new LanGroupFloorTransport(this);
 
     public Task ConfirmAsync(Guid remotePeerId, string friendlyName, CancellationToken cancellationToken)
     {
@@ -461,4 +463,27 @@ sealed class LanPeerAudioControlTransport : IAudioControlTransport
     void OnDropped(Guid peerId) { if (peerId == _peerId) ConnectionDropped?.Invoke(); }
     public Task SendAsync(ControlFrame frame, CancellationToken cancellationToken) =>
         _host.SendAsync(_peerId, frame, cancellationToken);
+}
+
+sealed class LanGroupFloorTransport : IGroupFloorTransport, IDisposable
+{
+    readonly LanPairingHost _host;
+
+    public LanGroupFloorTransport(LanPairingHost host)
+    {
+        _host = host;
+        _host.ApplicationFrameReceived += OnApplicationFrameReceived;
+    }
+
+    public event Action<Guid, ControlFrame>? FrameReceived;
+
+    public Task BroadcastAsync(ControlFrame frame, CancellationToken cancellationToken) =>
+        _host.BroadcastAsync(() => frame with { MessageId = Guid.NewGuid(), Payload = frame.Payload.ToArray() }, cancellationToken);
+
+    void OnApplicationFrameReceived(Guid peerId, ControlFrame frame)
+    {
+        if (frame.Type == ControlMessageType.GroupFloor) FrameReceived?.Invoke(peerId, frame);
+    }
+
+    public void Dispose() => _host.ApplicationFrameReceived -= OnApplicationFrameReceived;
 }

@@ -119,6 +119,11 @@ public enum ControlMessageType : ushort
     AudioSessionAccepted = 13,
     AudioSessionStopped = 14,
     AudioSessionRejected = 15,
+
+    /// <summary>Issue #29: a replicated group voice-floor command. Every
+    /// participant applies the same commands locally; no coordinator-private
+    /// queue or server-side state exists.</summary>
+    GroupFloor = 16,
 }
 
 /// <summary>
