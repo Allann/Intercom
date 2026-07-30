@@ -30,6 +30,54 @@ public class PeerControlChannelTests
     static SpkiPin Pin(byte seed) => new(Enumerable.Repeat(seed, 32).ToArray());
 
     [Fact]
+    public async Task SendAsync_WithoutCurrentConnection_Throws()
+    {
+        var channel = new PeerControlChannel(new FakeConnector(), LocalSpki(), Capability.Text, () => []);
+        var frame = new ControlFrame
+        {
+            Type = ControlMessageType.Chat,
+            MessageId = Guid.NewGuid(),
+            Payload = [],
+        };
+
+        var exception = await Assert.ThrowsAsync<InvalidOperationException>(
+            () => channel.SendAsync(frame, CancellationToken.None));
+
+        Assert.Equal("Not connected.", exception.Message);
+    }
+
+    [Fact]
+    public async Task SendAsync_WithCurrentConnection_ForwardsFrameAndCancellationToken()
+    {
+        using var remoteCert = SelfSignedCert();
+        var connector = new FakeConnector();
+        var connection = new FakeTransportConnection(remoteCert);
+        connector.NextConnection = connection;
+        connection.EnqueueReceive(Hello.Current(Capability.Text).ToFrame(Guid.NewGuid()));
+
+        var channel = new PeerControlChannel(connector, LocalSpki(), Capability.Text, () => []);
+        channel.OnDiscovered();
+        await channel.EvaluateConnectAsync(RemoteEndpoint, RemoteSpkiForTieBreak(), CancellationToken.None);
+        connection.Sent.Clear();
+        connection.SentCancellationTokens.Clear();
+
+        var frame = new ControlFrame
+        {
+            Type = ControlMessageType.Chat,
+            MessageId = Guid.NewGuid(),
+            Payload = [1, 2, 3],
+        };
+        using var cancellation = new CancellationTokenSource();
+
+        await channel.SendAsync(frame, cancellation.Token);
+
+        Assert.Same(frame, Assert.Single(connection.Sent));
+        Assert.Equal(cancellation.Token, Assert.Single(connection.SentCancellationTokens));
+
+        await channel.DisposeAsync();
+    }
+
+    [Fact]
     public async Task EvaluateConnectAsync_LowerLocalHash_DialsAndCompletesHandshake()
     {
         using var remoteCert = SelfSignedCert();
@@ -585,6 +633,7 @@ public class PeerControlChannelTests
 
         public X509Certificate2 RemoteCertificate { get; }
         public List<ControlFrame> Sent { get; } = [];
+        public List<CancellationToken> SentCancellationTokens { get; } = [];
         public bool Disposed { get; private set; }
 
         public void EnqueueReceive(ControlFrame frame) => _inbound.Writer.TryWrite(frame);
@@ -593,6 +642,7 @@ public class PeerControlChannelTests
         public Task SendAsync(ControlFrame frame, CancellationToken cancellationToken)
         {
             Sent.Add(frame);
+            SentCancellationTokens.Add(cancellationToken);
             return Task.CompletedTask;
         }
 
