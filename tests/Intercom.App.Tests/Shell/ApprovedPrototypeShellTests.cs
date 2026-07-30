@@ -135,6 +135,23 @@ public sealed class ApprovedPrototypeShellTests
     }
 
     [Fact]
+    public void Settings_ExposeAutomatedAudioLifecycleSoakTest()
+    {
+        var settingsPath = Path.GetFullPath(Path.Combine(Path.GetDirectoryName(XamlPath)!, "SettingsDialog.xaml"));
+        var settings = File.ReadAllText(settingsPath);
+        var code = File.ReadAllText(Path.ChangeExtension(settingsPath, ".xaml.cs"));
+        var soakTestPath = Path.Combine(Path.GetDirectoryName(settingsPath)!, "Audio", "AudioLifecycleSoakTest.cs");
+        var soakTest = File.ReadAllText(soakTestPath);
+
+        Assert.Contains("x:Name=\"AudioLifecycleTestButton\"", settings);
+        Assert.Contains("Run 100-cycle audio test", settings);
+        Assert.Contains("AudioLifecycleSoakTest.RunAsync", code);
+        Assert.Contains("public const int CycleCount = 100", soakTest);
+        Assert.Contains("new AudioGraphDevice()", soakTest);
+        Assert.Contains("rebound.Client.Bind", soakTest);
+    }
+
+    [Fact]
     public void ChatComposer_IsAnchoredToTheBottomOfTheChatCard()
     {
         var xaml = File.ReadAllText(XamlPath);
