@@ -7,6 +7,12 @@ namespace Intercom.App.Tests.Audio;
 public sealed class AudioSessionFrameCodecTests
 {
     [Fact]
+    public void GroupVoiceModeRoundTrips()
+    {
+        var offer = new AudioSessionOffer(Guid.NewGuid(), Guid.NewGuid(), 49152, RandomNumberGenerator.GetBytes(32), 1234, AudioInteractionMode.GroupVoice);
+        Assert.Equal(AudioInteractionMode.GroupVoice, AudioSessionFrameCodec.DecodeOffer(offer.ToFrame(Guid.NewGuid())).Mode);
+    }
+    [Fact]
     public void OfferRoundTripsFreshStreamMaterial()
     {
         var offer = new AudioSessionOffer(Guid.NewGuid(), Guid.NewGuid(), 49152, RandomNumberGenerator.GetBytes(32), 1234, AudioInteractionMode.HandsFree);
