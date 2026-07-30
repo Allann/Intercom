@@ -120,6 +120,21 @@ public sealed class ApprovedPrototypeShellTests
     }
 
     [Fact]
+    public void Settings_ExposeExplicitlyDisabledTwoPcMeasurementProfiles()
+    {
+        var settingsPath = Path.GetFullPath(Path.Combine(Path.GetDirectoryName(XamlPath)!, "SettingsDialog.xaml"));
+        var settings = File.ReadAllText(settingsPath);
+        var code = File.ReadAllText(Path.ChangeExtension(settingsPath, ".xaml.cs"));
+
+        Assert.Contains("x:Name=\"AudioMeasurementProfileCombo\"", settings);
+        Assert.Contains("Disabled (normal audio)", settings);
+        Assert.Contains("1% packet loss", settings);
+        Assert.Contains("5% packet loss", settings);
+        Assert.Contains("Six-frame burst loss", settings);
+        Assert.Contains("AudioMeasurementSettings.Save", code);
+    }
+
+    [Fact]
     public void ChatComposer_IsAnchoredToTheBottomOfTheChatCard()
     {
         var xaml = File.ReadAllText(XamlPath);

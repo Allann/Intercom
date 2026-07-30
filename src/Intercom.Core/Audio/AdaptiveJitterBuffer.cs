@@ -1,6 +1,6 @@
 namespace Intercom.Audio;
 
-public sealed record JitterFrame(ulong Sequence, ulong SampleTimestamp, byte[] Payload);
+public sealed record JitterFrame(ulong Sequence, ulong SampleTimestamp, byte[] Payload, AudioPacketFlags Flags = AudioPacketFlags.None);
 public sealed record JitterReadResult(JitterFrame? Frame, bool Conceal);
 
 /// <summary>Bounded 20 ms jitter buffer based on prototype #15. It starts at

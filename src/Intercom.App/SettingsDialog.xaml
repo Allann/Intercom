@@ -9,5 +9,15 @@
         <TextBlock Text="Intercom uses the default communications devices selected in Windows. Changes apply to the next voice connection." TextWrapping="Wrap" Opacity="0.75"/>
         <Button Content="Open microphone settings" HorizontalAlignment="Stretch" Click="OnOpenMicrophoneSettingsClick"/>
         <Button Content="Open speaker settings" HorizontalAlignment="Stretch" Click="OnOpenSpeakerSettingsClick"/>
+        <TextBlock Text="TWO-PC AUDIO MEASUREMENT" FontSize="12" FontWeight="Bold" Foreground="#FFB6502F" Margin="0,8,0,0"/>
+        <TextBlock Text="Diagnostic profiles affect new voice connections only. Leave this disabled for normal use." TextWrapping="Wrap" Opacity="0.75"/>
+        <ComboBox x:Name="AudioMeasurementProfileCombo" Header="Outbound test profile" HorizontalAlignment="Stretch" SelectionChanged="OnAudioMeasurementProfileChanged">
+            <ComboBoxItem Content="Disabled (normal audio)" Tag="disabled"/>
+            <ComboBoxItem Content="Clean measurement" Tag="clean"/>
+            <ComboBoxItem Content="1% packet loss" Tag="loss1"/>
+            <ComboBoxItem Content="5% packet loss" Tag="loss5"/>
+            <ComboBoxItem Content="Six-frame burst loss" Tag="burst"/>
+        </ComboBox>
+        <TextBlock Text="Run the same profile on both PCs, make several five-second PTT calls, then copy both intercom.log files to the report tool." TextWrapping="Wrap" Opacity="0.75"/>
     </StackPanel>
 </ContentDialog>

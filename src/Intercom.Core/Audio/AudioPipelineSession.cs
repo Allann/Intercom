@@ -8,13 +8,15 @@ namespace Intercom.Audio;
 /// independent background loops.</summary>
 public sealed class AudioPipelineSession : IAsyncDisposable
 {
+    sealed record CaptureItem(short[]? Samples, bool EndOfTalkspurt, long SourceUnixMilliseconds);
+
     readonly IAudioDevice _device;
     readonly UdpAudioSender _sender;
     readonly UdpAudioReceiver _receiver;
     readonly IAudioEncoder _encoder;
     readonly IAudioDecoder _decoder;
     readonly AdaptiveJitterBuffer _jitter = new();
-    readonly Channel<short[]> _captureQueue = Channel.CreateBounded<short[]>(new BoundedChannelOptions(12)
+    readonly Channel<CaptureItem> _captureQueue = Channel.CreateBounded<CaptureItem>(new BoundedChannelOptions(12)
     {
         FullMode = BoundedChannelFullMode.DropOldest,
         SingleReader = true,
@@ -25,6 +27,8 @@ public sealed class AudioPipelineSession : IAsyncDisposable
     readonly Guid _sendStreamId;
     readonly Guid _receiveStreamId;
     readonly object _gate = new();
+    readonly AudioMeasurementImpairment _impairment = new(AudioMeasurementSettings.Load());
+    bool MeasurementEnabled => _impairment.Profile != AudioMeasurementProfile.Disabled;
     Task[] _loops = [];
     ulong _sequence;
     bool _transmitting;
@@ -35,6 +39,7 @@ public sealed class AudioPipelineSession : IAsyncDisposable
     long _receivedPackets;
     long _playedFrames;
     int _capturePeak;
+    bool _receiveTalkspurtActive;
 
     public AudioPipelineSession(
         Guid sessionId,
@@ -89,8 +94,29 @@ public sealed class AudioPipelineSession : IAsyncDisposable
         }
     }
 
-    public void StartTransmitting() { lock (_gate) _transmitting = _device.CanCapture; }
-    public void StopTransmitting() { lock (_gate) _transmitting = false; }
+    public void StartTransmitting()
+    {
+        lock (_gate)
+        {
+            if (_transmitting || !_device.CanCapture) return;
+            _transmitting = true;
+        }
+        if (MeasurementEnabled)
+            DiagnosticLog.Current.Info("audio.measurement-talk-start", $"session={_sessionId} profile={_impairment.Profile.ToConfigValue()} sourceUnixMs={DateTimeOffset.UtcNow.ToUnixTimeMilliseconds()}");
+    }
+
+    public void StopTransmitting()
+    {
+        lock (_gate)
+        {
+            if (!_transmitting) return;
+            _transmitting = false;
+        }
+        var now = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds();
+        _captureQueue.Writer.TryWrite(new CaptureItem(null, true, now));
+        if (MeasurementEnabled)
+            DiagnosticLog.Current.Info("audio.measurement-talk-stop", $"session={_sessionId} profile={_impairment.Profile.ToConfigValue()} sourceUnixMs={now}");
+    }
 
     void OnCaptured(short[] samples)
     {
@@ -98,7 +124,7 @@ public sealed class AudioPipelineSession : IAsyncDisposable
         Interlocked.Add(ref _capturedSamples, samples.Length);
         var peak = samples.Length == 0 ? 0 : samples.Max(value => Math.Abs((int)value));
         Volatile.Write(ref _capturePeak, peak);
-        _captureQueue.Writer.TryWrite(samples);
+        _captureQueue.Writer.TryWrite(new CaptureItem(samples, false, DateTimeOffset.UtcNow.ToUnixTimeMilliseconds()));
     }
 
     void OnDeviceFailed(Exception error)
@@ -112,30 +138,46 @@ public sealed class AudioPipelineSession : IAsyncDisposable
         var pending = new List<short>(AudioFormat.SamplesPerFrame * 2);
         try
         {
-            await foreach (var quantum in _captureQueue.Reader.ReadAllAsync(cancellationToken))
+            await foreach (var item in _captureQueue.Reader.ReadAllAsync(cancellationToken))
             {
-                pending.AddRange(quantum);
+                if (item.EndOfTalkspurt)
+                {
+                    pending.Clear();
+                    await SendPacketAsync([], AudioPacketFlags.EndOfTalkspurt, item.SourceUnixMilliseconds, cancellationToken).ConfigureAwait(false);
+                    continue;
+                }
+                pending.AddRange(item.Samples!);
                 while (pending.Count >= AudioFormat.SamplesPerFrame)
                 {
                     var pcm = pending.GetRange(0, AudioFormat.SamplesPerFrame).ToArray();
                     pending.RemoveRange(0, AudioFormat.SamplesPerFrame);
-                    var sequence = _sequence++;
                     var encoded = _encoder.Encode(pcm);
-                    await _sender.SendAsync(new AudioPacket
-                    {
-                        SessionId = _sessionId,
-                        StreamId = _sendStreamId,
-                        Sequence = sequence,
-                        SampleTimestamp = sequence * AudioFormat.SamplesPerFrame,
-                        Flags = AudioPacketFlags.None,
-                        OpusPayload = encoded,
-                    }, cancellationToken).ConfigureAwait(false);
-                    Interlocked.Increment(ref _sentPackets);
+                    await SendPacketAsync(encoded, AudioPacketFlags.None, item.SourceUnixMilliseconds, cancellationToken).ConfigureAwait(false);
                 }
             }
         }
         catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested) { }
         catch (Exception ex) { DiagnosticLog.Current.Error("audio.send-loop-failed", $"session={_sessionId}", ex); State.Fail(); _cts.Cancel(); }
+    }
+
+    async Task SendPacketAsync(byte[] payload, AudioPacketFlags flags, long sourceUnixMilliseconds, CancellationToken cancellationToken)
+    {
+        var sequence = _sequence++;
+        if (_impairment.ShouldDrop(sequence, flags))
+        {
+            DiagnosticLog.Current.Info("audio.measurement-packet-dropped", $"session={_sessionId} sequence={sequence} profile={_impairment.Profile.ToConfigValue()}");
+            return;
+        }
+        await _sender.SendAsync(new AudioPacket
+        {
+            SessionId = _sessionId,
+            StreamId = _sendStreamId,
+            Sequence = sequence,
+            SampleTimestamp = checked((ulong)sourceUnixMilliseconds),
+            Flags = flags,
+            OpusPayload = payload,
+        }, cancellationToken).ConfigureAwait(false);
+        Interlocked.Increment(ref _sentPackets);
     }
 
     async Task ReceiveAsync(CancellationToken cancellationToken)
@@ -148,7 +190,12 @@ public sealed class AudioPipelineSession : IAsyncDisposable
                 if (packet is null) continue;
                 if (packet.SessionId != _sessionId || packet.StreamId != _receiveStreamId) continue;
                 Interlocked.Increment(ref _receivedPackets);
-                _jitter.Add(new JitterFrame(packet.Sequence, packet.SampleTimestamp, packet.OpusPayload));
+                if (!_receiveTalkspurtActive && packet.Flags == AudioPacketFlags.None)
+                {
+                    _receiveTalkspurtActive = true;
+                    if (MeasurementEnabled) LogMeasuredLatency("audio.measurement-first-received", packet);
+                }
+                _jitter.Add(new JitterFrame(packet.Sequence, packet.SampleTimestamp, packet.OpusPayload, packet.Flags));
             }
         }
         catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested) { }
@@ -164,14 +211,38 @@ public sealed class AudioPipelineSession : IAsyncDisposable
             {
                 var next = _jitter.Read();
                 if (next.Frame is null && !next.Conceal) continue;
+                if (next.Frame is { Flags: AudioPacketFlags.EndOfTalkspurt } marker)
+                {
+                    _receiveTalkspurtActive = false;
+                    if (MeasurementEnabled) LogMeasuredLatency("audio.measurement-release-to-speaker-queue", new AudioPacket
+                    {
+                        SessionId = _sessionId, StreamId = _receiveStreamId, Sequence = marker.Sequence,
+                        SampleTimestamp = marker.SampleTimestamp, Flags = marker.Flags, OpusPayload = marker.Payload,
+                    });
+                    continue;
+                }
                 var pcm = next.Conceal ? _decoder.ConcealLoss() : _decoder.Decode(next.Frame!.Payload);
                 _device.QueuePlayback(pcm);
                 Interlocked.Increment(ref _playedFrames);
+                if (MeasurementEnabled && next.Frame is { } measuredFrame)
+                    LogMeasuredLatency("audio.measurement-frame-to-speaker-queue", new AudioPacket
+                    {
+                        SessionId = _sessionId, StreamId = _receiveStreamId, Sequence = measuredFrame.Sequence,
+                        SampleTimestamp = measuredFrame.SampleTimestamp, Flags = measuredFrame.Flags, OpusPayload = measuredFrame.Payload,
+                    });
                 if (next.Conceal) State.Degrade(); else State.Recover();
             }
         }
         catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested) { }
         catch (Exception ex) { DiagnosticLog.Current.Error("audio.playout-loop-failed", $"session={_sessionId}", ex); State.Fail(); _cts.Cancel(); }
+    }
+
+    void LogMeasuredLatency(string eventName, AudioPacket packet)
+    {
+        var now = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds();
+        var source = checked((long)packet.SampleTimestamp);
+        DiagnosticLog.Current.Info(eventName,
+            $"session={_sessionId} profile={_impairment.Profile.ToConfigValue()} sequence={packet.Sequence} sourceUnixMs={source} observedUnixMs={now} estimatedMs={now - source} targetFrames={_jitter.TargetFrames} occupancy={_jitter.Occupancy} concealed={_jitter.ConcealedFrames} discarded={_jitter.DiscardedFrames}");
     }
 
     public void PlayTestTone()
