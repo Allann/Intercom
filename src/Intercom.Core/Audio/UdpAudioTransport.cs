@@ -11,10 +11,15 @@ public sealed class UdpAudioSender : IAsyncDisposable
 
     public UdpAudioSender(IPEndPoint remote, ReadOnlySpan<byte> key, uint noncePrefix)
     {
-        _remote = remote;
-        _udp = new UdpClient(remote.AddressFamily);
+        _remote = NormalizeRemoteEndpoint(remote);
+        _udp = new UdpClient(_remote.AddressFamily);
         _protector = new AudioPacketProtector(key, noncePrefix);
     }
+
+    static IPEndPoint NormalizeRemoteEndpoint(IPEndPoint remote) =>
+        remote.Address.IsIPv4MappedToIPv6
+            ? new IPEndPoint(remote.Address.MapToIPv4(), remote.Port)
+            : remote;
 
     public ValueTask<int> SendAsync(AudioPacket packet, CancellationToken cancellationToken) =>
         _udp.SendAsync(_protector.Protect(packet), _remote, cancellationToken);
