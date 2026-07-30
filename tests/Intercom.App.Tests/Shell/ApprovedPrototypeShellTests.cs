@@ -70,6 +70,19 @@ public sealed class ApprovedPrototypeShellTests
     }
 
     [Fact]
+    public void PairingFailuresUseInlineNoticeAndFamilyRosterCanRemoveDevices()
+    {
+        var xaml = File.ReadAllText(XamlPath);
+        var codeBehind = File.ReadAllText(CodeBehindPath);
+
+        Assert.Contains("x:Name=\"PairingFailureNotice\"", xaml);
+        Assert.Contains("Content = \"Remove\"", codeBehind);
+        Assert.Contains("OnRemoveDeviceClick", codeBehind);
+        Assert.Contains("await _peerHost.ForgetAsync", codeBehind);
+        Assert.DoesNotContain("public async void ShowPairingFailed", codeBehind);
+    }
+
+    [Fact]
     public void PushToTalk_ObservesButtonHandledPointerPresses()
     {
         var xaml = File.ReadAllText(XamlPath);

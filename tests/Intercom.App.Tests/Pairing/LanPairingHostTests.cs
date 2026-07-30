@@ -168,6 +168,27 @@ public sealed class LanPairingHostTests : IDisposable
         Assert.Equal(Capability.Text | Capability.AttentionCards, lease.Capabilities);
     }
 
+    [Fact]
+    public async Task ForgetAsync_RevokesTrustAndDisconnectsTheLivePeer()
+    {
+        var aStore = Store("forget-a");
+        var bStore = Store("forget-b");
+        aStore.Approve(Peer(bStore, "PC B"));
+        bStore.Approve(Peer(aStore, "PC A"));
+        var port = FreePort();
+        await using var a = new LanPairingHost(aStore, port, _ => null);
+        await using var b = new LanPairingHost(bStore, port + 1, _ => null);
+        a.Start();
+        b.Start();
+        await a.ConnectApprovedAsync(new IPEndPoint(IPAddress.Loopback, port + 1), aStore.ApprovedPeers[0], CancellationToken.None);
+        await WaitUntilAsync(() => a.ConnectedPeerIds.Contains(bStore.Identity.PeerId));
+
+        Assert.True(await a.ForgetAsync(bStore.Identity.PeerId));
+
+        Assert.DoesNotContain(bStore.Identity.PeerId, a.ConnectedPeerIds);
+        Assert.True(aStore.ApprovedPeers.Single(peer => peer.PeerId == bStore.Identity.PeerId).Revoked);
+    }
+
     IdentityStore Store(string name)
     {
         var store = new IdentityStore(Path.Combine(_root, name));

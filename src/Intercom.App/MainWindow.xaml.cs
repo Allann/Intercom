@@ -227,6 +227,9 @@ public sealed partial class MainWindow : Window, IResidentWindow
         foreach (var approved in approvedPeers)
         {
             var online = _peerHost?.ConnectedPeerIds.Contains(approved.PeerId) == true;
+            var row = new Grid { ColumnSpacing = 6 };
+            row.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(1, GridUnitType.Star) });
+            row.ColumnDefinitions.Add(new ColumnDefinition { Width = GridLength.Auto });
             var member = new Microsoft.UI.Xaml.Controls.Primitives.ToggleButton
             {
                 Content = $"✓ {approved.FriendlyName} · {(online ? "online" : "offline")}",
@@ -237,7 +240,19 @@ public sealed partial class MainWindow : Window, IResidentWindow
                 Tag = approved.PeerId,
             };
             member.Click += OnFamilyMemberClick;
-            DiscoveredPeersList.Children.Add(member);
+            var remove = new Button
+            {
+                Content = "Remove",
+                Tag = approved.PeerId,
+                VerticalAlignment = VerticalAlignment.Stretch,
+                Padding = new Thickness(8, 5, 8, 5),
+                FontSize = 11,
+            };
+            remove.Click += OnRemoveDeviceClick;
+            Grid.SetColumn(remove, 1);
+            row.Children.Add(member);
+            row.Children.Add(remove);
+            DiscoveredPeersList.Children.Add(row);
         }
         foreach (var peer in pairablePeers)
         {
@@ -627,16 +642,10 @@ public sealed partial class MainWindow : Window, IResidentWindow
         await dialog.ShowAsync();
     }
 
-    public async void ShowPairingFailed(string message)
+    public void ShowPairingFailed(string message)
     {
-        var dialog = new ContentDialog
-        {
-            Title = "Couldn’t connect to that PC",
-            Content = message,
-            CloseButtonText = "Close",
-            XamlRoot = Content.XamlRoot,
-        };
-        await dialog.ShowAsync();
+        PairingFailureNotice.Message = message;
+        PairingFailureNotice.IsOpen = true;
     }
 
     /// <summary>Issue #22: gives this window access to the real
@@ -672,6 +681,37 @@ public sealed partial class MainWindow : Window, IResidentWindow
         if (member.IsChecked == true) _selectedFamilyPeerIds.Add(peerId);
         else _selectedFamilyPeerIds.Remove(peerId);
         ApplyFamilySelection();
+    }
+
+    async void OnRemoveDeviceClick(object sender, RoutedEventArgs e)
+    {
+        if (sender is not Button { Tag: Guid peerId } || _identityStore is null || _peerHost is null) return;
+        var peer = _identityStore.ApprovedPeers.FirstOrDefault(candidate => candidate.PeerId == peerId && !candidate.Revoked);
+        if (peer is null) return;
+
+        var dialog = new ContentDialog
+        {
+            Title = $"Remove {peer.FriendlyName}?",
+            Content = "This device will be disconnected and must complete the pairing ceremony again before it can communicate with this PC.",
+            PrimaryButtonText = "Remove device",
+            CloseButtonText = "Cancel",
+            DefaultButton = ContentDialogButton.Close,
+            XamlRoot = Content.XamlRoot,
+        };
+        if (await dialog.ShowAsync() != ContentDialogResult.Primary) return;
+
+        if (_audioNegotiators.Remove(peerId, out var negotiator)) await negotiator.DisposeAsync();
+        _audioSessions.Remove(peerId);
+        _chatServices.Remove(peerId);
+        _attentionCardServices.Remove(peerId);
+        _attentionCardTransports.Remove(peerId);
+        _attentionCardRouters.Clear();
+        _selectedFamilyPeerIds.Remove(peerId);
+        if (_selectedChatPeerId == peerId) _selectedChatPeerId = null;
+        if (_selectedAttentionPeerId == peerId) _selectedAttentionPeerId = null;
+        await _peerHost.ForgetAsync(peerId);
+        DiagnosticLog.Current.Info("peer.forgotten", $"peer={peerId}");
+        UpdateDiscoveredPeers(_lastDiscoveredPeers);
     }
 
     void ApplyFamilySelection()

@@ -375,6 +375,29 @@ public sealed class LanPairingHost : IAsyncDisposable
         return pairing.Ceremony.RejectLocalAsync(cancellationToken);
     }
 
+    public async Task<bool> ForgetAsync(Guid peerId)
+    {
+        TlsPairingTransport? connection;
+        ActivePairing? pairing;
+        lock (_gate)
+        {
+            _connections.Remove(peerId, out connection);
+            _pairings.Remove(peerId, out pairing);
+            _connecting.Remove(peerId);
+        }
+
+        var forgotten = _identityStore.Forget(peerId);
+        if (connection is not null) await connection.DisposeAsync().ConfigureAwait(false);
+        if (pairing is not null && !ReferenceEquals(pairing.Transport, connection))
+            await pairing.Transport.DisposeAsync().ConfigureAwait(false);
+        if (forgotten)
+        {
+            ConnectionDropped?.Invoke(peerId);
+            ConnectionsChanged?.Invoke();
+        }
+        return forgotten;
+    }
+
     void Remove(Guid peerId)
     {
         ActivePairing? pairing;
