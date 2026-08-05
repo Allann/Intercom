@@ -38,6 +38,8 @@ public partial class App : Application
     readonly ChatTtsSettingsStore _chatTtsSettings = new();
     readonly ContactStore _contactStore = new();
     readonly ManualOverrideStore _manualOverrideStore = new();
+    readonly System.Collections.Concurrent.ConcurrentDictionary<Guid, byte> _userInitiatedPeerConnections = [];
+    int _userInitiatedUnknownPeerConnection;
     DiscoveryService? _discoveryService;
     LanPairingHost? _pairingHost;
     LanDiscoveryProbe? _lanDiscoveryProbe;
@@ -165,7 +167,8 @@ public partial class App : Application
             deviceId: _lifecycle.Identity.PeerId,
             idleTimeProvider: new Win32IdleTimeProvider(),
             dndSettings: _dndSettings,
-            capabilities: Capability.Text | Capability.Tts | Capability.SpokenChat | Capability.AttentionCards);
+            capabilities: Capability.Text | Capability.Tts | Capability.SpokenChat | Capability.AttentionCards
+                | Capability.ChatMarkdown | Capability.ChatImages | Capability.ChatTyping);
 
         _presenceReceiverService = new PresenceReceiverService();
         _contactStore.Load();
@@ -299,7 +302,9 @@ public partial class App : Application
             {
                 var peer = _discoveryService?.VisiblePeers.FirstOrDefault(candidate => candidate.Spki is { } pin && pin == spki);
                 return peer is null || !Guid.TryParseExact(peer.PeerIdHint.Value, "N", out var id) ? null : id;
-            });
+            },
+            Capability.Text | Capability.Tts | Capability.SpokenChat | Capability.AttentionCards
+                | Capability.ChatMarkdown | Capability.ChatImages | Capability.ChatTyping);
         _pairingHost.PairingCodeReady += OnPairingCodeReady;
         _pairingHost.Approved += OnPairingApproved;
         _pairingHost.PairingFailed += OnPairingFailed;
@@ -338,6 +343,7 @@ public partial class App : Application
             .FirstOrDefault();
         if (endpoint is null) return;
 
+        _userInitiatedPeerConnections.TryAdd(peerId, 0);
         DiagnosticLog.Current.Info("ui.pairing-requested", $"peer={peerId} endpoint={endpoint.Address}:{endpoint.Port}");
         _ = _pairingHost.ConnectAsync(
             new System.Net.IPEndPoint(endpoint.Address, endpoint.Port),
@@ -351,20 +357,34 @@ public partial class App : Application
         if (_pairingHost is null) return;
         DiagnosticLog.Current.Info("ui.manual-peer-requested", $"peer={approvedPeer?.PeerId} endpoint={endpoint}");
         if (approvedPeer is null)
+        {
+            Interlocked.Exchange(ref _userInitiatedUnknownPeerConnection, 1);
             _ = _pairingHost.ConnectManualAsync(endpoint, CancellationToken.None);
+        }
         else
+        {
+            _userInitiatedPeerConnections.TryAdd(approvedPeer.PeerId, 0);
             _ = _pairingHost.ConnectApprovedAsync(endpoint, approvedPeer, CancellationToken.None);
+        }
     }
 
-    void OnPairingCodeReady(Guid peerId, string code) => _uiDispatcherQueue?.TryEnqueue(() =>
-        _mainWindow?.ShowPairingCode(
-            peerId,
-            code,
-            name => _pairingHost!.ConfirmAsync(peerId, name, CancellationToken.None),
-            () => _pairingHost!.RejectAsync(peerId, CancellationToken.None)));
+    void OnPairingCodeReady(Guid peerId, string code)
+    {
+        if (Interlocked.Exchange(ref _userInitiatedUnknownPeerConnection, 0) == 1)
+        {
+            _userInitiatedPeerConnections.TryAdd(peerId, 0);
+        }
+        _uiDispatcherQueue?.TryEnqueue(() =>
+            _mainWindow?.ShowPairingCode(
+                peerId,
+                code,
+                name => _pairingHost!.ConfirmAsync(peerId, name, CancellationToken.None),
+                () => _pairingHost!.RejectAsync(peerId, CancellationToken.None)));
+    }
 
     void OnPairingApproved(ApprovedPeer peer) => _uiDispatcherQueue?.TryEnqueue(() =>
     {
+        _userInitiatedPeerConnections.TryRemove(peer.PeerId, out _);
         OnVisiblePeersChanged();
         _mainWindow?.ShowPairingApproved(peer.FriendlyName);
     });
@@ -372,7 +392,10 @@ public partial class App : Application
     void OnPairingFailed(Guid peerId, Exception ex)
     {
         DiagnosticLog.Current.Error("ui.pairing-failed", $"peer={peerId}", ex);
-        _uiDispatcherQueue?.TryEnqueue(() => _mainWindow?.ShowPairingFailed(ex.Message));
+        var showToUser = _userInitiatedPeerConnections.TryRemove(peerId, out _)
+            || peerId == Guid.Empty && Interlocked.Exchange(ref _userInitiatedUnknownPeerConnection, 0) == 1;
+        if (showToUser)
+            _uiDispatcherQueue?.TryEnqueue(() => _mainWindow?.ShowPairingFailed(ex.Message));
     }
 
     void OnVisiblePeersChanged()

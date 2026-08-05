@@ -124,6 +124,17 @@ public enum ControlMessageType : ushort
     /// participant applies the same commands locally; no coordinator-private
     /// queue or server-side state exists.</summary>
     GroupFloor = 16,
+
+    /// <summary>Ephemeral direct-chat composing state. It is never retained
+    /// as conversation content and expires if refreshes stop.</summary>
+    ChatTyping = 17,
+
+    ChatImageStart = 18,
+    ChatImageChunk = 19,
+    ChatImageComplete = 20,
+    ChatImageReceived = 21,
+    ChatImageCancelled = 22,
+    ChatImageFailed = 23,
 }
 
 /// <summary>

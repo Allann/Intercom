@@ -1,11 +1,19 @@
 using Microsoft.UI;
 using Microsoft.UI.Dispatching;
+using Microsoft.UI.Input;
 using Microsoft.UI.Text;
 using Microsoft.UI.Xaml;
 using Microsoft.UI.Xaml.Controls;
+using Microsoft.UI.Xaml.Documents;
 using Microsoft.UI.Xaml.Media;
+using Microsoft.UI.Xaml.Media.Imaging;
 using Microsoft.UI.Windowing;
+using Windows.ApplicationModel.DataTransfer;
+using Windows.Storage;
+using Windows.Storage.Pickers;
+using Windows.Storage.Streams;
 using Windows.UI;
+using Windows.UI.Core;
 using WinRT.Interop;
 using Intercom.AttentionCards;
 using Intercom.Audio;
@@ -24,11 +32,15 @@ using Intercom.App.AttentionCards;
 using Intercom.App.Audio;
 using Intercom.App.Chat;
 using Intercom.App.Input;
+using Intercom.App.Notifications;
 
 namespace Intercom.App;
 
 public sealed partial class MainWindow : Window, IResidentWindow
 {
+    const int MinimumWindowWidth = 1050;
+    const int MinimumWindowHeight = 720;
+    bool _enforcingMinimumWindowSize;
     // Matches the prototype's va-sign palette (intercom-shell-prototype.html
     // --green/--red), not the pairing dialog's cream/ink palette — the sign
     // is a status indicator, not a document/postcard motif.
@@ -54,7 +66,6 @@ public sealed partial class MainWindow : Window, IResidentWindow
 
     readonly DispatcherQueue _dispatcherQueue;
     readonly DispatcherQueueTimer _chatChimeHideTimer;
-    readonly DispatcherQueueTimer _audioDiagnosticsTimer;
     readonly GlobalPushToTalkHotkey _pushToTalkHotkey;
 
     IdentityStore? _identityStore;
@@ -66,14 +77,11 @@ public sealed partial class MainWindow : Window, IResidentWindow
 
     ChatTtsSettingsStore? _chatTtsSettings;
     ChatSpeechService? _chatSpeechService;
-    readonly Dictionary<Guid, ChatService> _chatServices = [];
+    readonly Dictionary<Guid, RichChatService> _chatServices = [];
     readonly Dictionary<Guid, IAttentionCardTransport> _attentionCardTransports = [];
     readonly Dictionary<Guid, AttentionCardFanoutRouter> _attentionCardRouters = [];
     readonly Dictionary<Guid, AudioSessionNegotiator> _audioNegotiators = [];
     readonly Dictionary<Guid, AudioPipelineSession> _audioSessions = [];
-
-    // ---- Issue #25: attention cards ----
-    const string CustomComposerPresetLabel = "Custom…";
 
     readonly Dictionary<Guid, AttentionCardService> _attentionCardServices = [];
     LanPairingHost? _peerHost;
@@ -84,7 +92,7 @@ public sealed partial class MainWindow : Window, IResidentWindow
     Guid? _selectedAttentionPeerId;
     readonly HashSet<Guid> _selectedFamilyPeerIds = [];
     AttentionCardToastPresenter? _attentionCardToastPresenter;
-    string _selectedComposerIcon = AttentionCardPresets.Presets[0].Icon;
+    readonly UnreadBadgePresenter _unreadBadgePresenter = new();
 
     // There is no live multi-peer connection roster in this app shell yet
     // (see MainWindow.xaml's chat drawer comment) — this Guid stands in for
@@ -97,7 +105,12 @@ public sealed partial class MainWindow : Window, IResidentWindow
     // loaded state, so that doesn't get misread as a user action and
     // re-persisted as a no-op toggle.
     bool _suppressSpokenChatToggleHandler;
+    OptimizedChatImage? _pendingChatImage;
+    readonly DispatcherQueueTimer _typingTimer;
+    DateTimeOffset _lastTypingSignal;
+    Flyout? _emojiFlyout;
     IReadOnlyList<VisiblePeer> _lastDiscoveredPeers = [];
+    string? _renderedFamilyRosterSnapshot;
     bool _refreshingPeerChoices;
     bool _hasGroupFloor;
     bool _handRaised;
@@ -119,6 +132,8 @@ public sealed partial class MainWindow : Window, IResidentWindow
         Hwnd = WindowNative.GetWindowHandle(this);
         var windowId = Win32Interop.GetWindowIdFromWindow(Hwnd);
         AppWin = AppWindow.GetFromWindowId(windowId);
+        AppWin.Changed += OnAppWindowChanged;
+        EnforceMinimumWindowSize();
 
         _dispatcherQueue = DispatcherQueue.GetForCurrentThread();
         _chatChimeHideTimer = _dispatcherQueue.CreateTimer();
@@ -128,10 +143,17 @@ public sealed partial class MainWindow : Window, IResidentWindow
             _chatChimeHideTimer.Stop();
             ChatChimeNotice.Visibility = Visibility.Collapsed;
         };
-        _audioDiagnosticsTimer = _dispatcherQueue.CreateTimer();
-        _audioDiagnosticsTimer.Interval = TimeSpan.FromSeconds(1);
-        _audioDiagnosticsTimer.Tick += (_, _) => RenderAudioDiagnostics();
-
+        _typingTimer = _dispatcherQueue.CreateTimer();
+        _typingTimer.Interval = TimeSpan.FromSeconds(1);
+        _typingTimer.Tick += (_, _) =>
+        {
+            if (_selectedChatPeerId is Guid peerId && _chatServices.TryGetValue(peerId, out var service))
+            {
+                service.Tick();
+                RenderTypingIndicator();
+            }
+        };
+        _typingTimer.Start();
         _pushToTalkHotkey = new GlobalPushToTalkHotkey();
         _pushToTalkHotkey.Pressed += () => _dispatcherQueue.TryEnqueue(() => _ = BeginPushToTalkAsync());
         _pushToTalkHotkey.Released += () => _dispatcherQueue.TryEnqueue(EndPushToTalk);
@@ -151,11 +173,28 @@ public sealed partial class MainWindow : Window, IResidentWindow
 
     async void OnSettingsClick(object sender, RoutedEventArgs e)
     {
-        var dialog = new SettingsDialog
+        var dialog = new SettingsDialog(CanTestSelectedSpeaker() ? TestSelectedSpeaker : null)
         {
             XamlRoot = Content.XamlRoot,
         };
         await dialog.ShowAsync();
+    }
+
+    void OnAppWindowChanged(AppWindow sender, AppWindowChangedEventArgs args)
+    {
+        if (args.DidSizeChange) EnforceMinimumWindowSize();
+    }
+
+    void EnforceMinimumWindowSize()
+    {
+        if (_enforcingMinimumWindowSize) return;
+        var size = AppWin.Size;
+        var width = Math.Max(size.Width, MinimumWindowWidth);
+        var height = Math.Max(size.Height, MinimumWindowHeight);
+        if (width == size.Width && height == size.Height) return;
+        _enforcingMinimumWindowSize = true;
+        try { AppWin.Resize(new Windows.Graphics.SizeInt32(width, height)); }
+        finally { _enforcingMinimumWindowSize = false; }
     }
 
     void OnAppWindowClosing(AppWindow sender, AppWindowClosingEventArgs args)
@@ -166,6 +205,7 @@ public sealed partial class MainWindow : Window, IResidentWindow
 
     public void ShowFromTray()
     {
+        _unreadBadgePresenter.Clear();
         Activate();
         AppWin.Show();
         AppWin.MoveInZOrderAtTop();
@@ -220,8 +260,25 @@ public sealed partial class MainWindow : Window, IResidentWindow
     {
         _lastDiscoveredPeers = peers;
         var approvedPeers = _identityStore?.ApprovedPeers.Where(peer => !peer.Revoked).ToList() ?? [];
+        var onlineApprovedPeers = approvedPeers
+            .Where(peer => _peerHost?.ConnectedPeerIds.Contains(peer.PeerId) == true)
+            .ToList();
+        if (onlineApprovedPeers.Count == 1)
+        {
+            _selectedFamilyPeerIds.Clear();
+            _selectedFamilyPeerIds.Add(onlineApprovedPeers[0].PeerId);
+        }
         var pairablePeers = peers.Where(peer => peer.Spki is not null
             && !approvedPeers.Any(approved => approved.PeerId.ToString("N").Equals(peer.PeerIdHint.Value, StringComparison.OrdinalIgnoreCase))).ToList();
+        var snapshot = string.Join('|', approvedPeers.Select(peer =>
+            $"{peer.PeerId:N}:{peer.FriendlyName}:{_peerHost?.ConnectedPeerIds.Contains(peer.PeerId) == true}:{RemotePresenceLabel(peer.PeerId, _peerHost?.ConnectedPeerIds.Contains(peer.PeerId) == true)}"))
+            + "||" + string.Join('|', pairablePeers.Select(peer => $"{peer.PeerIdHint}:{DescribePeer(peer)}"));
+        if (snapshot == _renderedFamilyRosterSnapshot)
+        {
+            RefreshMessagingPeers();
+            return;
+        }
+        _renderedFamilyRosterSnapshot = snapshot;
         NoDiscoveredPeersNotice.Visibility = approvedPeers.Count == 0 && pairablePeers.Count == 0 ? Visibility.Visible : Visibility.Collapsed;
         DiscoveredPeersList.Children.Clear();
         foreach (var approved in approvedPeers)
@@ -230,24 +287,48 @@ public sealed partial class MainWindow : Window, IResidentWindow
             var row = new Grid { ColumnSpacing = 6 };
             row.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(1, GridUnitType.Star) });
             row.ColumnDefinitions.Add(new ColumnDefinition { Width = GridLength.Auto });
+            var memberContent = new StackPanel { Orientation = Orientation.Horizontal, Spacing = 8 };
+            memberContent.Children.Add(new Microsoft.UI.Xaml.Shapes.Ellipse
+            {
+                Width = 11,
+                Height = 11,
+                Fill = online ? AvailableGreen : DndRed,
+                Stroke = Ink,
+                StrokeThickness = 1.5,
+                VerticalAlignment = VerticalAlignment.Center,
+            });
+            memberContent.Children.Add(new TextBlock
+            {
+                Text = approved.FriendlyName,
+                FontWeight = FontWeights.SemiBold,
+                VerticalAlignment = VerticalAlignment.Center,
+            });
             var member = new Microsoft.UI.Xaml.Controls.Primitives.ToggleButton
             {
-                Content = $"✓ {approved.FriendlyName} · {RemotePresenceLabel(approved.PeerId, online)}",
+                Content = memberContent,
                 HorizontalAlignment = HorizontalAlignment.Stretch,
-                HorizontalContentAlignment = HorizontalAlignment.Center,
+                HorizontalContentAlignment = HorizontalAlignment.Left,
                 IsEnabled = online,
                 IsChecked = _selectedFamilyPeerIds.Contains(approved.PeerId),
                 Tag = approved.PeerId,
+                Padding = new Thickness(10, 8, 10, 8),
+                BorderBrush = Ink,
+                BorderThickness = new Thickness(2),
+                CornerRadius = new CornerRadius(8),
             };
+            ToolTipService.SetToolTip(member, $"{approved.FriendlyName} is {RemotePresenceLabel(approved.PeerId, online)}");
             member.Click += OnFamilyMemberClick;
             var remove = new Button
             {
-                Content = "Remove",
+                Content = new SymbolIcon(Symbol.Delete),
                 Tag = approved.PeerId,
                 VerticalAlignment = VerticalAlignment.Stretch,
-                Padding = new Thickness(8, 5, 8, 5),
-                FontSize = 11,
+                Width = 38,
+                Padding = new Thickness(6),
+                Background = new SolidColorBrush(Colors.Transparent),
+                BorderThickness = new Thickness(0),
             };
+            ToolTipService.SetToolTip(remove, $"Remove {approved.FriendlyName}");
             remove.Click += OnRemoveDeviceClick;
             Grid.SetColumn(remove, 1);
             row.Children.Add(member);
@@ -469,6 +550,11 @@ public sealed partial class MainWindow : Window, IResidentWindow
 
     async void OnPushToTalkPressed(object sender, Microsoft.UI.Xaml.Input.PointerRoutedEventArgs e)
     {
+        if (VoiceModeSwitch.IsOn)
+        {
+            OnHandsFreeClick(sender, new RoutedEventArgs());
+            return;
+        }
         PushToTalkButton.CapturePointer(e.Pointer);
         await BeginPushToTalkAsync();
     }
@@ -532,8 +618,15 @@ public sealed partial class MainWindow : Window, IResidentWindow
 
     void OnPushToTalkReleased(object sender, Microsoft.UI.Xaml.Input.PointerRoutedEventArgs e)
     {
+        if (VoiceModeSwitch.IsOn) return;
         PushToTalkButton.ReleasePointerCaptures();
         EndPushToTalk();
+    }
+
+    async void OnVoiceModeToggled(object sender, RoutedEventArgs e)
+    {
+        if (!VoiceModeSwitch.IsOn && _handsFreeActive) await EndHandsFreeAsync();
+        RenderVoiceControls();
     }
 
     void EndPushToTalk()
@@ -572,8 +665,6 @@ public sealed partial class MainWindow : Window, IResidentWindow
         HandsFreeStatusText.Text = _handsFreeActive
             ? $"Hands-free with {choice?.FriendlyName ?? "a family member"}"
             : "No hands-free session";
-        HandsFreeButton.Content = _handsFreeActive ? "End" : "Start Hands-Free";
-        HandsFreeButton.Background = _handsFreeActive ? DndRed : AvailableGreen;
         HandsFreeRecipientCombo.IsEnabled = !_handsFreeActive;
     }
 
@@ -583,11 +674,20 @@ public sealed partial class MainWindow : Window, IResidentWindow
             && _peerHost?.ConnectedPeerIds.Contains(choice.PeerId) == true;
         var voiceEnabled = _handsFreeActive || (_groupFloorService is not null ? _hasGroupFloor : connectedPeer);
         PushToTalkButton.IsEnabled = voiceEnabled;
-        PushToTalkButton.Content = new TextBlock { Text = "Hold to\nTalk", TextAlignment = TextAlignment.Center };
-        PushToTalkButton.Background = voiceEnabled ? DndRed : new SolidColorBrush(Color.FromArgb(255, 0xCB, 0xBF, 0xA4));
-        PushToTalkHint.Text = PushToTalkButton.IsEnabled
-            ? "Hold the button while you speak."
-            : "Choose an online family member to talk.";
+        var toggleMode = VoiceModeSwitch.IsOn;
+        PushToTalkButton.Content = new TextBlock
+        {
+            Text = toggleMode ? (_handsFreeActive ? "Turn\nOff" : "Turn\nOn") : "Hold to\nTalk",
+            TextAlignment = TextAlignment.Center,
+        };
+        PushToTalkButton.Background = !voiceEnabled
+            ? new SolidColorBrush(Color.FromArgb(255, 0xCB, 0xBF, 0xA4))
+            : toggleMode && _handsFreeActive ? AvailableGreen : DndRed;
+        PushToTalkHint.Text = !voiceEnabled
+            ? "Choose an online family member to talk."
+            : toggleMode
+                ? (_handsFreeActive ? "Speaking is on. Press again to stop." : "Press once to start speaking; press again to stop.")
+                : "Hold the button while you speak.";
     }
 
     public async void ShowPairingCode(
@@ -737,12 +837,15 @@ public sealed partial class MainWindow : Window, IResidentWindow
         HandsFreeStatusText.Text = selected.Count == 0
             ? "Select an online family member from the Family list."
             : selected.Count == 1 ? $"Push-to-talk with {selected[0].FriendlyName}." : $"Group push-to-talk · {selected.Count} members.";
+        var groupVisible = selected.Count > 1;
+        GroupFloorPanel.Visibility = groupVisible ? Visibility.Visible : Visibility.Collapsed;
+        GroupFloorRow.Height = groupVisible ? new GridLength(1, GridUnitType.Star) : new GridLength(0);
+        VoicePanel.RowSpacing = groupVisible ? 14 : 0;
         UpdateMessagingEnabled();
         RenderChatSpokenToggle();
         RenderChatMessages();
         RenderAttentionCardShelf();
         RenderVoiceControls();
-        RenderAudioDiagnostics();
     }
 
     static void SelectPeerChoice(ComboBox combo, Guid? peerId)
@@ -839,10 +942,11 @@ public sealed partial class MainWindow : Window, IResidentWindow
         {
             if (!_chatServices.ContainsKey(peer.PeerId))
             {
-                var chat = new ChatService(_peerHost.CreateChatTransport(peer.PeerId));
+                var chat = new RichChatService(_peerHost.CreateChatTransport(peer.PeerId));
                 chat.MessageReceived += message => OnIncomingChatMessage(peer.PeerId, message);
                 chat.Conversation.MessageAdded += _ => _dispatcherQueue.TryEnqueue(RenderChatMessages);
                 chat.Conversation.MessageUpdated += _ => _dispatcherQueue.TryEnqueue(RenderChatMessages);
+                chat.PeerTypingChanged += _ => _dispatcherQueue.TryEnqueue(RenderTypingIndicator);
                 _chatServices[peer.PeerId] = chat;
 
                 var cardTransport = _peerHost.CreateAttentionCardTransport(peer.PeerId);
@@ -940,7 +1044,6 @@ public sealed partial class MainWindow : Window, IResidentWindow
         try
         {
             await session.StartAsync();
-            _audioDiagnosticsTimer.Start();
             if (mode == AudioInteractionMode.HandsFree)
             {
                 _handsFreeActive = true;
@@ -981,7 +1084,6 @@ public sealed partial class MainWindow : Window, IResidentWindow
             UpdateMessagingEnabled();
         }
         RenderVoiceControls();
-        RenderAudioDiagnostics();
     }
 
     async Task RetireFailedAudioSessionAsync(Guid peerId, AudioPipelineSession failed)
@@ -992,7 +1094,6 @@ public sealed partial class MainWindow : Window, IResidentWindow
             await negotiator.RetireAsync(failed);
         else
             await failed.DisposeAsync();
-        RenderAudioDiagnostics();
     }
 
     public async Task StopAudioAsync()
@@ -1002,37 +1103,41 @@ public sealed partial class MainWindow : Window, IResidentWindow
         _groupFloorService?.Dispose();
         if (_groupFloorTransport is IDisposable groupTransport) groupTransport.Dispose();
         _pushToTalkHotkey.Dispose();
-        _audioDiagnosticsTimer.Stop();
         foreach (var session in _audioSessions.Values.ToList()) await session.DisposeAsync();
         _audioSessions.Clear();
         foreach (var negotiator in _audioNegotiators.Values.ToList()) await negotiator.DisposeAsync();
         _audioNegotiators.Clear();
     }
 
-    void OnTestSpeakerClick(object sender, RoutedEventArgs e)
-    {
-        if (HandsFreeRecipientCombo.SelectedItem is PeerChoice choice
-            && _audioSessions.TryGetValue(choice.PeerId, out var session))
-            session.PlayTestTone();
-    }
-
-    void RenderAudioDiagnostics()
+    bool CanTestSelectedSpeaker()
     {
         if (HandsFreeRecipientCombo.SelectedItem is not PeerChoice choice
-            || !_audioSessions.TryGetValue(choice.PeerId, out var session))
-        {
-            TestSpeakerButton.IsEnabled = false;
-            return;
-        }
+            || !_audioSessions.TryGetValue(choice.PeerId, out var session)) return false;
+        return session.State.State is AudioSessionState.Running or AudioSessionState.Degraded;
+    }
 
-        TestSpeakerButton.IsEnabled = session.State.State is AudioSessionState.Running or AudioSessionState.Degraded;
+    void TestSelectedSpeaker()
+    {
+        if (HandsFreeRecipientCombo.SelectedItem is PeerChoice choice
+            && _audioSessions.TryGetValue(choice.PeerId, out var session)) session.PlayTestTone();
     }
 
     void UpdateMessagingEnabled()
     {
         if (_peerHost is null) return;
-        ChatSendButton.IsEnabled = _selectedChatPeerId is Guid chatPeer && _peerHost.ConnectedPeerIds.Contains(chatPeer);
-        SendAttentionCardButton.IsEnabled = _selectedAttentionPeerId is Guid cardPeer && _peerHost.ConnectedPeerIds.Contains(cardPeer);
+        var directChat = _selectedFamilyPeerIds.Count == 1
+            && _selectedChatPeerId is Guid chatPeer && _peerHost.ConnectedPeerIds.Contains(chatPeer);
+        var richService = _selectedChatPeerId is Guid selectedPeer && _chatServices.TryGetValue(selectedPeer, out var candidate) ? candidate : null;
+        var textLimit = _pendingChatImage is null ? RichChatService.MaxMessageCharacters : RichChatService.MaxCaptionCharacters;
+        ChatSendButton.IsEnabled = directChat && ChatInputBox.Text.Length <= textLimit
+            && (_pendingChatImage is not null || !string.IsNullOrWhiteSpace(ChatInputBox.Text));
+        ChatInputBox.IsEnabled = directChat;
+        ChatImageButton.IsEnabled = directChat && _pendingChatImage is null && richService?.SupportsImages == true;
+        ChatEmojiButton.IsEnabled = directChat;
+        ChatInputBox.PlaceholderText = _selectedFamilyPeerIds.Count > 1 ? "Group chat is not supported yet"
+            : richService is { SupportsImages: false } ? "Text only · peer update required for images" : "Type Markdown…";
+        var canSendAttention = _selectedAttentionPeerId is Guid cardPeer && _peerHost.ConnectedPeerIds.Contains(cardPeer);
+        foreach (var button in AttentionPresetButtonsPanel.Children.OfType<Button>()) button.IsEnabled = canSendAttention;
         HandsFreeButton.IsEnabled = _handsFreeActive ||
             HandsFreeRecipientCombo.SelectedItem is PeerChoice handsFreePeer
             && _peerHost.ConnectedPeerIds.Contains(handsFreePeer.PeerId);
@@ -1063,6 +1168,8 @@ public sealed partial class MainWindow : Window, IResidentWindow
         // thread sent, but this handler must not assume that.
         _dispatcherQueue.TryEnqueue(() =>
         {
+            var isHiddenInTray = !AppWin.IsVisible;
+            if (isHiddenInTray) _unreadBadgePresenter.Increment();
             var dndEnabled = _dndSettings?.DndEnabled ?? false;
 
             // Issue #24 acceptance criterion: "DND suppresses the
@@ -1081,7 +1188,11 @@ public sealed partial class MainWindow : Window, IResidentWindow
             ShowChatChime();
             if (_chatTtsSettings?.IsEnabled(peerId) == true)
             {
-                _ = _chatSpeechService?.SpeakAsync(message.Text);
+                var semanticText = ChatMarkdown.Parse(message.Text).SpeechText;
+                var speech = message.ContentKind == ChatContentKind.Image
+                    ? string.IsNullOrWhiteSpace(semanticText) ? "Sent an image" : $"Sent an image. {semanticText}"
+                    : semanticText;
+                _ = _chatSpeechService?.SpeakAsync(speech);
             }
         });
     }
@@ -1093,62 +1204,202 @@ public sealed partial class MainWindow : Window, IResidentWindow
         _chatChimeHideTimer.Start();
     }
 
-    void OnChatSendClick(object sender, RoutedEventArgs e) => _ = SendChatTextAsync(ChatInputBox.Text);
+    void OnChatSendClick(object sender, RoutedEventArgs e)
+    {
+        DiagnosticLog.Current.Info("chat.send-debug", $"[DEBUG-emoji-send] clicked textLength={ChatInputBox.Text.Length} pendingImage={_pendingChatImage is not null}");
+        _ = SendChatAsync();
+    }
 
     void OnChatInputKeyDown(object sender, Microsoft.UI.Xaml.Input.KeyRoutedEventArgs e)
     {
-        if (e.Key == Windows.System.VirtualKey.Enter) _ = SendChatTextAsync(ChatInputBox.Text);
+        if (e.Key != Windows.System.VirtualKey.Enter) return;
+        var shift = InputKeyboardSource.GetKeyStateForCurrentThread(Windows.System.VirtualKey.Shift).HasFlag(CoreVirtualKeyStates.Down);
+        if (shift) return;
+        e.Handled = true;
+        _ = SendChatAsync();
+    }
+
+    async Task SendChatAsync()
+    {
+        var text = ChatInputBox.Text;
+        DiagnosticLog.Current.Info("chat.send-debug", $"[DEBUG-emoji-send] entered textLength={text.Length} runeCount={text.EnumerateRunes().Count()} pendingImage={_pendingChatImage is not null}");
+        if (_pendingChatImage is null && string.IsNullOrWhiteSpace(text)) return;
+        if (text.Length > (_pendingChatImage is null ? RichChatService.MaxMessageCharacters : RichChatService.MaxCaptionCharacters)) return;
+        if (_selectedFamilyPeerIds.Count != 1) return;
+        var peerId = _selectedFamilyPeerIds.Single();
+        if (_peerHost?.ConnectedPeerIds.Contains(peerId) != true || !_chatServices.TryGetValue(peerId, out var service)) return;
+
+        var image = _pendingChatImage;
+        DiagnosticLog.Current.Info("chat.send-debug", "[DEBUG-emoji-send] clearing-composer");
+        ClearPendingChatImage();
+        ChatInputBox.Text = "";
+        DiagnosticLog.Current.Info("chat.send-debug", "[DEBUG-emoji-send] composer-cleared");
+        try
+        {
+            if (image is null) await service.SendTextAsync(text, CancellationToken.None);
+            else await service.SendImageAsync(image, text, CancellationToken.None);
+            DiagnosticLog.Current.Info("chat.send-debug", "[DEBUG-emoji-send] service-send-completed");
+        }
+        catch (Exception ex)
+        {
+            DiagnosticLog.Current.Error("chat.send-failed", "[DEBUG-emoji-send] service-send-failed", ex);
+        }
     }
 
     async Task SendChatTextAsync(string text)
     {
         if (string.IsNullOrWhiteSpace(text)) return;
-        var selectedOnline = _selectedFamilyPeerIds
-            .Where(id => _peerHost?.ConnectedPeerIds.Contains(id) == true && _chatServices.ContainsKey(id))
-            .ToList();
-        if (selectedOnline.Count == 0) return;
+        ChatInputBox.Text = text;
+        await SendChatAsync();
+    }
 
-        ChatInputBox.Text = "";
-        if (selectedOnline.Count > 1)
+    async void OnChatInputChanged(object sender, TextChangedEventArgs e)
+    {
+        UpdateChatCharacterCount();
+        UpdateMessagingEnabled();
+        if (_selectedChatPeerId is not Guid peerId || !_chatServices.TryGetValue(peerId, out var service)) return;
+        var typing = !string.IsNullOrWhiteSpace(ChatInputBox.Text);
+        if (!typing || DateTimeOffset.UtcNow - _lastTypingSignal >= TimeSpan.FromSeconds(3))
         {
-            foreach (var selectedPeerId in selectedOnline)
-            {
-                try { await _chatServices[selectedPeerId].SendAsync(text, CancellationToken.None); }
-                catch { }
-            }
-            return;
+            _lastTypingSignal = DateTimeOffset.UtcNow;
+            try { await service.SetTypingAsync(typing, CancellationToken.None); } catch { }
         }
+    }
 
-        var peerId = selectedOnline[0];
-        var chatService = _chatServices[peerId];
+    void UpdateChatCharacterCount()
+    {
+        var limit = _pendingChatImage is null ? RichChatService.MaxMessageCharacters : RichChatService.MaxCaptionCharacters;
+        var remaining = limit - ChatInputBox.Text.Length;
+        ChatCharacterCount.Text = $"{remaining:N0} remaining";
+        ChatCharacterCount.Foreground = remaining < 0 ? DndRed : Ink;
+        ChatCharacterCount.Visibility = remaining < 200 ? Visibility.Visible : Visibility.Collapsed;
+    }
+
+    void RenderTypingIndicator()
+    {
+        var visible = _selectedChatPeerId is Guid peerId && _chatServices.TryGetValue(peerId, out var service) && service.IsPeerTyping;
+        ChatTypingText.Visibility = visible ? Visibility.Visible : Visibility.Collapsed;
+    }
+
+    async void OnChooseChatImage(object sender, RoutedEventArgs e)
+    {
+        var picker = new FileOpenPicker();
+        InitializeWithWindow.Initialize(picker, Hwnd);
+        picker.FileTypeFilter.Add(".jpg"); picker.FileTypeFilter.Add(".jpeg"); picker.FileTypeFilter.Add(".png");
+        picker.FileTypeFilter.Add(".gif"); picker.FileTypeFilter.Add(".webp"); picker.FileTypeFilter.Add(".bmp");
+        var file = await picker.PickSingleFileAsync();
+        if (file is null) return;
+        await AttachChatImageAsync(await file.OpenStreamForReadAsync());
+    }
+
+    async void OnChatPaste(object sender, TextControlPasteEventArgs e)
+    {
+        var data = Clipboard.GetContent();
+        if (!data.Contains(StandardDataFormats.Bitmap)) return;
+        e.Handled = true;
+        if (_pendingChatImage is not null) return;
+        var reference = await data.GetBitmapAsync();
+        using var source = await reference.OpenReadAsync();
+        await AttachChatImageAsync(source.AsStreamForRead());
+    }
+
+    void OnChatDragOver(object sender, DragEventArgs e)
+    {
+        if (_pendingChatImage is null && e.DataView.Contains(StandardDataFormats.StorageItems))
+            e.AcceptedOperation = DataPackageOperation.Copy;
+    }
+
+    async void OnChatDrop(object sender, DragEventArgs e)
+    {
+        if (_pendingChatImage is not null || !e.DataView.Contains(StandardDataFormats.StorageItems)) return;
+        var file = (await e.DataView.GetStorageItemsAsync()).OfType<StorageFile>().FirstOrDefault();
+        if (file is null) return;
+        try { await AttachChatImageAsync(await file.OpenStreamForReadAsync()); } catch { }
+    }
+
+    async Task AttachChatImageAsync(Stream source)
+    {
+        ChatAttachmentPreview.Visibility = Visibility.Visible;
+        ChatAttachmentDetails.Text = "Optimizing…";
+        ChatSendButton.IsEnabled = false;
         try
         {
-            var contact = FindContactForPeer(peerId);
-            if (contact is null || _presenceReceiver is null || _manualOverrideStore is null)
-            {
-                await chatService.SendAsync(text, CancellationToken.None);
-            }
-            else
-            {
-                var endpoints = contact.MemberPeerIds
-                    .Where(_chatServices.ContainsKey)
-                    .ToDictionary(id => id, id => new ChatDeviceEndpoint { DeviceId = id, Service = _chatServices[id] });
-                var router = new ChatFanoutRouter(
-                    endpoints,
-                    () => _manualOverrideStore.Get(contact.ContactId),
-                    () => _manualOverrideStore.Clear(contact.ContactId));
-                await router.SendAsync(
-                    _presenceReceiver.LiveDevices(contact.MemberPeerIds, DateTimeOffset.UtcNow),
-                    text,
-                    CancellationToken.None);
-            }
+            _pendingChatImage = await ChatImageOptimizer.OptimizeAsync(source, CancellationToken.None);
+            UpdateChatCharacterCount();
+            ChatAttachmentThumbnail.Source = await CreateBitmapAsync(_pendingChatImage.Bytes);
+            ChatAttachmentDetails.Text = $"{_pendingChatImage.Width} × {_pendingChatImage.Height} · {_pendingChatImage.Bytes.Length / 1024:N0} KiB · {_pendingChatImage.Format}";
         }
-        catch
+        catch (Exception ex)
         {
-            // Already reflected as Undelivered in the conversation by
-            // ChatService itself (ADR-0001: no auto-resend) — nothing
-            // further to do here beyond not crashing the UI thread.
+            DiagnosticLog.Current.Error("chat.image-prepare-failed", "Image attachment preparation failed.", ex);
+            ClearPendingChatImage();
+            ChatChimeNotice.Text = "Image could not be prepared";
+            ShowChatChime();
         }
+        finally { source.Dispose(); UpdateMessagingEnabled(); }
+    }
+
+    void OnRemoveChatAttachment(object sender, RoutedEventArgs e) => ClearPendingChatImage();
+
+    void ClearPendingChatImage()
+    {
+        _pendingChatImage = null;
+        UpdateChatCharacterCount();
+        ChatAttachmentThumbnail.Source = null;
+        ChatAttachmentPreview.Visibility = Visibility.Collapsed;
+        UpdateMessagingEnabled();
+    }
+
+    static async Task<BitmapImage> CreateBitmapAsync(byte[] bytes)
+    {
+        var stream = new InMemoryRandomAccessStream();
+        using (var writer = new DataWriter(stream))
+        {
+            writer.WriteBytes(bytes);
+            await writer.StoreAsync();
+        }
+        stream.Seek(0);
+        var bitmap = new BitmapImage();
+        bitmap.SetSource(stream);
+        return bitmap;
+    }
+
+    void OnShowEmojiPicker(object sender, RoutedEventArgs e)
+    {
+        if (_emojiFlyout is null)
+        {
+            var search = new TextBox { PlaceholderText = "Search emoji", Margin = new Thickness(0, 0, 0, 6) };
+            var category = new ComboBox { ItemsSource = ChatEmojiCatalog.Categories, SelectedIndex = 0, Margin = new Thickness(0, 0, 0, 6) };
+            var grid = new GridView { Width = 360, MaxHeight = 300, IsItemClickEnabled = true, SelectionMode = ListViewSelectionMode.None };
+            void Filter() => grid.ItemsSource = ChatEmojiCatalog.Search(search.Text, LoadRecentEmojis(), category.SelectedItem as string);
+            search.TextChanged += (_, _) => Filter();
+            category.SelectionChanged += (_, _) => Filter();
+            grid.ItemClick += (_, args) =>
+            {
+                var emoji = (string)args.ClickedItem;
+                var start = ChatInputBox.SelectionStart;
+                ChatInputBox.Text = ChatInputBox.Text.Insert(start, emoji);
+                ChatInputBox.SelectionStart = start + emoji.Length;
+                SaveRecentEmoji(emoji);
+                _emojiFlyout?.Hide();
+                ChatInputBox.Focus(FocusState.Programmatic);
+            };
+            _emojiFlyout = new Flyout { Content = new StackPanel { Children = { search, category, grid } } };
+            Filter();
+        }
+        _emojiFlyout.ShowAt(ChatEmojiButton);
+    }
+
+    static IReadOnlyList<string> LoadRecentEmojis()
+    {
+        var value = ApplicationData.Current.LocalSettings.Values["chat.emoji-recents"] as string;
+        return value?.Split('|', StringSplitOptions.RemoveEmptyEntries) ?? [];
+    }
+
+    static void SaveRecentEmoji(string emoji)
+    {
+        var recent = LoadRecentEmojis().Where(item => item != emoji).Prepend(emoji).Take(16);
+        ApplicationData.Current.LocalSettings.Values["chat.emoji-recents"] = string.Join('|', recent);
     }
 
     void OnSpokenChatToggled(object sender, RoutedEventArgs e)
@@ -1167,6 +1418,25 @@ public sealed partial class MainWindow : Window, IResidentWindow
 
     void RenderChatMessages()
     {
+        DiagnosticLog.Current.Info("chat.render-debug", "[DEBUG-emoji-send] render-entered");
+        try
+        {
+            RenderChatMessagesCore();
+        }
+        catch (Exception ex)
+        {
+            // DispatcherQueue.TryEnqueue callbacks run outside the managed
+            // exception path App.xaml.cs's UnhandledException hooks: an
+            // uncaught exception here becomes a stowed exception and hard-
+            // crashes the process (observed as CoreMessagingXP.dll faults,
+            // code 0xc000027b) instead of reaching that handler.
+            DiagnosticLog.Current.Error("chat.render-failed", "[DEBUG-emoji-send] render-crashed", ex);
+        }
+        DiagnosticLog.Current.Info("chat.render-debug", "[DEBUG-emoji-send] render-completed");
+    }
+
+    void RenderChatMessagesCore()
+    {
         ChatMessagesPanel.Children.Clear();
         if (_selectedChatPeerId is not Guid peerId || !_chatServices.TryGetValue(peerId, out var service)) return;
         foreach (var message in service.Conversation.Messages)
@@ -1179,56 +1449,132 @@ public sealed partial class MainWindow : Window, IResidentWindow
     {
         var isMine = message.Direction == ChatMessageDirection.Sent;
         var textColor = isMine ? Paper : Ink;
-
-        var content = new StackPanel { Spacing = 2 };
-        content.Children.Add(new TextBlock
+        var content = new StackPanel { Spacing = 4 };
+        if (message.ContentKind == ChatContentKind.Image)
         {
-            Text = message.Text,
-            TextWrapping = TextWrapping.Wrap,
-            Foreground = textColor,
-            FontSize = 12,
-        });
-        content.Children.Add(new TextBlock
-        {
-            Text = DescribeDeliveryState(message),
-            FontSize = 9,
-            Opacity = 0.75,
-            Foreground = textColor,
-        });
+            if (message.Image is not null)
+            {
+                var imageControl = new Image { MaxWidth = 240, MaxHeight = 180, Stretch = Stretch.Uniform };
+                imageControl.Tapped += (_, _) => ShowChatImage(message.Image);
+                content.Children.Add(imageControl);
+                _ = SetImageSourceAsync(imageControl, message.Image.Bytes);
+                if (message.Direction == ChatMessageDirection.Sent && message.TransferState == ChatTransferState.Sending)
+                {
+                    var cancel = new Button { Content = "Cancel", FontSize = 9 };
+                    cancel.Click += (_, _) =>
+                    {
+                        if (_selectedChatPeerId is Guid id && _chatServices.TryGetValue(id, out var rich)) _ = rich.CancelOutgoingImageAsync(message.MessageId, CancellationToken.None);
+                    };
+                    content.Children.Add(cancel);
+                }
+            }
+            else
+            {
+                content.Children.Add(new TextBlock { Text = message.TransferState == ChatTransferState.Failed ? "Image not received" : "Receiving image…", Foreground = textColor });
+                content.Children.Add(new ProgressBar { Minimum = 0, Maximum = 1, Value = message.TransferProgress, IsIndeterminate = message.TransferProgress <= 0 });
+                if (message.Direction == ChatMessageDirection.Received && message.TransferState == ChatTransferState.Receiving)
+                {
+                    var cancel = new Button { Content = "Cancel", FontSize = 9 };
+                    cancel.Click += (_, _) =>
+                    {
+                        if (_selectedChatPeerId is Guid id && _chatServices.TryGetValue(id, out var rich)) _ = rich.CancelImageAsync(message.MessageId, CancellationToken.None);
+                    };
+                    content.Children.Add(cancel);
+                }
+            }
+        }
+        if (!string.IsNullOrWhiteSpace(message.Text)) content.Children.Add(BuildMarkdownBlock(message.Text, textColor));
+        content.Children.Add(new TextBlock { Text = DescribeDeliveryState(message), FontSize = 9, Opacity = 0.75, Foreground = textColor });
 
         if (message.DeliveryState == ChatDeliveryState.Undelivered)
         {
-            // ADR-0001: no auto-resend — this button sends the same text as
-            // a brand new message with a brand new MessageId, exactly what
-            // "the sender retries manually" means; it never tries to
-            // resurrect the original MessageId.
             var resendButton = new Button { Content = "Resend", FontSize = 9, Background = Mustard, Foreground = Ink };
-            resendButton.Click += (_, _) => _ = SendChatTextAsync(message.Text);
+            resendButton.Click += (_, _) =>
+            {
+                if (message.ContentKind == ChatContentKind.Image && message.Image is not null && _selectedChatPeerId is Guid id && _chatServices.TryGetValue(id, out var rich))
+                    _ = rich.SendImageAsync(message.Image, message.Text, CancellationToken.None);
+                else _ = SendChatTextAsync(message.Text);
+            };
             content.Children.Add(resendButton);
         }
 
         return new Border
         {
-            Child = content,
-            Background = isMine ? Teal : Paper,
-            BorderBrush = Ink,
-            BorderThickness = new Thickness(2),
-            CornerRadius = new CornerRadius(10),
-            Padding = new Thickness(10, 6, 10, 6),
-            MaxWidth = 280,
+            Child = content, Background = isMine ? Teal : Paper, BorderBrush = Ink,
+            BorderThickness = new Thickness(2), CornerRadius = new CornerRadius(10),
+            Padding = new Thickness(10, 6, 10, 6), MaxWidth = 280,
             HorizontalAlignment = isMine ? HorizontalAlignment.Right : HorizontalAlignment.Left,
         };
     }
 
+    RichTextBlock BuildMarkdownBlock(string source, Brush foreground)
+    {
+        var block = new RichTextBlock { TextWrapping = TextWrapping.Wrap, Foreground = foreground, FontSize = 12, IsTextSelectionEnabled = true };
+        var paragraph = new Paragraph();
+        foreach (var inline in ChatMarkdown.Parse(source).Inlines)
+        {
+            if (inline is ChatLinkRun link)
+            {
+                var hyperlink = new Hyperlink();
+                hyperlink.Inlines.Add(new Run { Text = link.Text });
+                ToolTipService.SetToolTip(hyperlink, link.Destination.Host);
+                hyperlink.Click += (_, _) => _ = OpenChatLinkAsync(link);
+                paragraph.Inlines.Add(hyperlink);
+            }
+            else if (inline is ChatTextRun text)
+            {
+                paragraph.Inlines.Add(new Run
+                {
+                    Text = text.Text,
+                    FontWeight = text.Bold ? FontWeights.Bold : FontWeights.Normal,
+                    FontStyle = text.Italic ? Windows.UI.Text.FontStyle.Italic : Windows.UI.Text.FontStyle.Normal,
+                    TextDecorations = text.Strikethrough ? Windows.UI.Text.TextDecorations.Strikethrough : Windows.UI.Text.TextDecorations.None,
+                    FontFamily = text.Code ? new FontFamily("Consolas") : null,
+                });
+            }
+        }
+        block.Blocks.Add(paragraph);
+        return block;
+    }
+
+    async Task OpenChatLinkAsync(ChatLinkRun link)
+    {
+        if (link.RequiresConfirmation)
+        {
+            var dialog = new ContentDialog
+            {
+                XamlRoot = ChatPanel.XamlRoot, Title = "Open this website?", Content = link.Destination.AbsoluteUri,
+                PrimaryButtonText = "Open", CloseButtonText = "Cancel", DefaultButton = ContentDialogButton.Close,
+            };
+            if (await dialog.ShowAsync() != ContentDialogResult.Primary) return;
+        }
+        await Windows.System.Launcher.LaunchUriAsync(link.Destination);
+    }
+
+    static async Task SetImageSourceAsync(Image control, byte[] bytes) => control.Source = await CreateBitmapAsync(bytes);
+
+    void ShowChatImage(OptimizedChatImage image)
+    {
+        RootShellGrid.IsHitTestVisible = false;
+        RootShellGrid.Opacity = 0.55;
+        var workArea = DisplayArea.GetFromWindowId(AppWin.Id, DisplayAreaFallback.Primary).WorkArea;
+        var viewer = new ChatImageViewerWindow(image, workArea);
+        viewer.Closed += (_, _) => { RootShellGrid.IsHitTestVisible = true; RootShellGrid.Opacity = 1; };
+        viewer.Activate();
+    }
+
     static string DescribeDeliveryState(ChatMessage message)
     {
+        if (message.TransferState == ChatTransferState.RecipientCancelled) return "recipient cancelled";
+        if (message.TransferState == ChatTransferState.Cancelled) return "cancelled";
+        if (message.TransferState == ChatTransferState.Failed) return "image not received";
         if (message.Direction == ChatMessageDirection.Received) return "received";
+        if (message.ContentKind == ChatContentKind.Image && message.TransferState == ChatTransferState.Sending)
+            return $"sending… {message.TransferProgress:P0}";
         return message.DeliveryState switch
         {
-            ChatDeliveryState.Pending => "sending...",
-            ChatDeliveryState.Delivered => "delivered",
-            ChatDeliveryState.Undelivered => "undelivered",
-            _ => "",
+            ChatDeliveryState.Pending => "sending...", ChatDeliveryState.Delivered => "delivered",
+            ChatDeliveryState.Undelivered => "undelivered", _ => "",
         };
     }
 
@@ -1260,8 +1606,7 @@ public sealed partial class MainWindow : Window, IResidentWindow
     /// back.</summary>
     void InitializeAttentionCardShelf()
     {
-        RenderComposerPresets();
-        RenderEmojiPicker();
+        RenderAttentionPresetButtons();
         RenderAttentionCardShelf();
     }
 
@@ -1273,6 +1618,7 @@ public sealed partial class MainWindow : Window, IResidentWindow
         // loopback demo happens to call back synchronously today.
         _dispatcherQueue.TryEnqueue(async () =>
         {
+            if (!AppWin.IsVisible) _unreadBadgePresenter.Increment();
             var dndEnabled = _dndSettings?.DndEnabled ?? false;
 
             // Issue #25 acceptance criterion: "DND produces no chime/toast
@@ -1331,65 +1677,33 @@ public sealed partial class MainWindow : Window, IResidentWindow
         return service?.AcknowledgeAsync(cardMessageId, cancellationToken) ?? Task.CompletedTask;
     }
 
-    void RenderComposerPresets()
+    void RenderAttentionPresetButtons()
     {
-        var items = AttentionCardPresets.Presets.Select(p => p.Purpose).ToList();
-        items.Add(CustomComposerPresetLabel);
-        ComposerPresetCombo.ItemsSource = items;
-        ComposerPresetCombo.SelectedIndex = 0;
-    }
-
-    void OnComposerPresetChanged(object sender, SelectionChangedEventArgs e)
-    {
-        var isCustom = ComposerPresetCombo.SelectedItem as string == CustomComposerPresetLabel;
-        ComposerCustomTextBox.Visibility = isCustom ? Visibility.Visible : Visibility.Collapsed;
-        if (!isCustom && ComposerPresetCombo.SelectedIndex >= 0 && ComposerPresetCombo.SelectedIndex < AttentionCardPresets.Presets.Count)
+        AttentionPresetButtonsPanel.Children.Clear();
+        foreach (var preset in AttentionCardPresets.Presets)
         {
-            SetSelectedComposerIcon(AttentionCardPresets.Presets[ComposerPresetCombo.SelectedIndex].Icon);
-        }
-    }
-
-    /// <summary>The icon picker — issue #25's explicit "32x32 touch targets"
-    /// sizing requirement, one button per <see cref="AttentionCardPresets.IconChoices"/>
-    /// entry (intercom-shell-prototype.html's #emoji-grid). Available for
-    /// BOTH a preset (as an override) and a Custom card (as the only way to
-    /// pick an icon at all).</summary>
-    void RenderEmojiPicker()
-    {
-        EmojiPickerPanel.Children.Clear();
-        foreach (var icon in AttentionCardPresets.IconChoices)
-        {
-            var isSelected = icon == _selectedComposerIcon;
             var button = new Button
             {
-                Content = icon,
-                Width = 32,
-                Height = 32,
+                Content = preset.Icon,
+                Width = 64,
+                Height = 64,
                 Padding = new Thickness(0),
-                FontSize = 16,
-                Background = isSelected ? Mustard : Paper,
+                FontSize = 30,
+                Background = Paper,
                 Foreground = Ink,
                 BorderBrush = Ink,
                 BorderThickness = new Thickness(2),
+                CornerRadius = new CornerRadius(10),
             };
-            button.Click += (_, _) => SetSelectedComposerIcon(icon);
-            EmojiPickerPanel.Children.Add(button);
+            ToolTipService.SetToolTip(button, preset.Purpose);
+            button.Click += (_, _) => _ = SendAttentionCardAsync(preset.Purpose, preset.Icon);
+            AttentionPresetButtonsPanel.Children.Add(button);
         }
+        UpdateMessagingEnabled();
     }
 
-    void SetSelectedComposerIcon(string icon)
+    async Task SendAttentionCardAsync(string purpose, string icon)
     {
-        _selectedComposerIcon = icon;
-        RenderEmojiPicker();
-    }
-
-    void OnSendAttentionCardClick(object sender, RoutedEventArgs e) => _ = SendAttentionCardAsync();
-
-    async Task SendAttentionCardAsync()
-    {
-        var isCustom = ComposerPresetCombo.SelectedItem as string == CustomComposerPresetLabel;
-        var purpose = isCustom ? ComposerCustomTextBox.Text.Trim() : ComposerPresetCombo.SelectedItem as string ?? "";
-        if (string.IsNullOrWhiteSpace(purpose)) return;
 
         var selectedOnline = _selectedFamilyPeerIds
             .Where(id => _peerHost?.ConnectedPeerIds.Contains(id) == true && _attentionCardServices.ContainsKey(id))
@@ -1399,10 +1713,9 @@ public sealed partial class MainWindow : Window, IResidentWindow
         {
             foreach (var selectedPeerId in selectedOnline)
             {
-                try { await _attentionCardServices[selectedPeerId].SendAsync(purpose, _selectedComposerIcon, CancellationToken.None); }
+                try { await _attentionCardServices[selectedPeerId].SendAsync(purpose, icon, CancellationToken.None); }
                 catch { }
             }
-            if (isCustom) ComposerCustomTextBox.Text = "";
             return;
         }
 
@@ -1414,7 +1727,7 @@ public sealed partial class MainWindow : Window, IResidentWindow
             var contact = FindContactForPeer(peerId);
             if (contact is null || _presenceReceiver is null || _manualOverrideStore is null)
             {
-                await cardService.SendAsync(purpose, _selectedComposerIcon, CancellationToken.None);
+                await cardService.SendAsync(purpose, icon, CancellationToken.None);
             }
             else
             {
@@ -1422,7 +1735,7 @@ public sealed partial class MainWindow : Window, IResidentWindow
                 await router.SendAsync(
                     _presenceReceiver.LiveDevices(contact.MemberPeerIds, DateTimeOffset.UtcNow),
                     purpose,
-                    _selectedComposerIcon,
+                    icon,
                     CancellationToken.None);
             }
         }
@@ -1432,8 +1745,6 @@ public sealed partial class MainWindow : Window, IResidentWindow
             // AttentionCardService itself (ADR-0001: no auto-resend) —
             // nothing further to do here beyond not crashing the UI thread.
         }
-
-        if (isCustom) ComposerCustomTextBox.Text = "";
     }
 
     Contact? FindContactForPeer(Guid peerId) =>

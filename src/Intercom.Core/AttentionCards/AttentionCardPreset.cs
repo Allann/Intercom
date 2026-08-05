@@ -32,7 +32,8 @@ public static class AttentionCardPresets
         new("Get the door?", "🚪"),
         new("Package arrived", "📦"),
         new("Call when free", "☎️"),
-        new("Need a hand", "❤️"),
+        new("Need a hand", "✋"),
+        new("I love you", "❤️"),
     ];
 
     /// <summary>The full emoji icon picker set (intercom-shell-prototype.html's

@@ -71,6 +71,42 @@ public sealed class ChatConversation
         return message;
     }
 
+    public ChatMessage AddOutboundImage(Guid messageId, OptimizedChatImage image, string caption)
+    {
+        var message = new ChatMessage
+        {
+            MessageId = messageId, Direction = ChatMessageDirection.Sent, Text = caption,
+            Timestamp = _clock(), DeliveryState = ChatDeliveryState.Pending,
+            ContentKind = ChatContentKind.Image, Image = image,
+            TransferState = ChatTransferState.Sending,
+        };
+        lock (_gate) { _messages.Add(message); }
+        MessageAdded?.Invoke(message);
+        return message;
+    }
+
+    public ChatMessage AddInboundImage(Guid messageId, string caption)
+    {
+        var message = new ChatMessage
+        {
+            MessageId = messageId, Direction = ChatMessageDirection.Received, Text = caption,
+            Timestamp = _clock(), DeliveryState = ChatDeliveryState.Pending,
+            ContentKind = ChatContentKind.Image, TransferState = ChatTransferState.Receiving,
+        };
+        lock (_gate) { _messages.Add(message); }
+        MessageAdded?.Invoke(message);
+        return message;
+    }
+
+    public void UpdateImage(Guid messageId, OptimizedChatImage? image, ChatTransferState state, double progress, ChatDeliveryState? delivery = null) =>
+        Update(messageId, existing => existing with
+        {
+            Image = image ?? existing.Image,
+            TransferState = state,
+            TransferProgress = Math.Clamp(progress, 0, 1),
+            DeliveryState = delivery ?? existing.DeliveryState,
+        });
+
     /// <summary>Transitions a still-<see cref="ChatDeliveryState.Pending"/>
     /// sent message to <see cref="ChatDeliveryState.Delivered"/> — the
     /// mechanical Delivered receipt arrived while still connected. A no-op
@@ -121,5 +157,18 @@ public sealed class ChatConversation
             _messages[index] = updated;
         }
         if (updated is not null) MessageUpdated?.Invoke(updated);
+    }
+
+    void Update(Guid messageId, Func<ChatMessage, ChatMessage> transition)
+    {
+        ChatMessage? updated = null;
+        lock (_gate)
+        {
+            var index = _messages.FindIndex(message => message.MessageId == messageId);
+            if (index < 0) return;
+            updated = transition(_messages[index]);
+            _messages[index] = updated;
+        }
+        MessageUpdated?.Invoke(updated);
     }
 }

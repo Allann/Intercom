@@ -30,6 +30,19 @@ public enum ChatDeliveryState
     Undelivered,
 }
 
+public enum ChatContentKind { Text, Image }
+
+public enum ChatTransferState
+{
+    None,
+    Sending,
+    Receiving,
+    Delivered,
+    Failed,
+    Cancelled,
+    RecipientCancelled,
+}
+
 /// <summary>One chat message in a two-party conversation (issue #24 is not
 /// group chat).</summary>
 public sealed record ChatMessage
@@ -39,4 +52,8 @@ public sealed record ChatMessage
     public required string Text { get; init; }
     public required DateTimeOffset Timestamp { get; init; }
     public required ChatDeliveryState DeliveryState { get; init; }
+    public ChatContentKind ContentKind { get; init; } = ChatContentKind.Text;
+    public OptimizedChatImage? Image { get; init; }
+    public ChatTransferState TransferState { get; init; }
+    public double TransferProgress { get; init; }
 }

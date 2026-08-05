@@ -28,7 +28,7 @@ public sealed class ApprovedPrototypeShellTests
 
         Assert.Contains("Text=\"FAMILY\"", xaml);
         Assert.Contains("Text=\"GROUP FLOOR\"", xaml);
-        Assert.Contains("Text=\"HANDS-FREE\"", xaml);
+        Assert.Contains("x:Name=\"VoiceModeSwitch\"", xaml);
         Assert.Contains("x:Name=\"PushToTalkButton\"", xaml);
         Assert.Contains("Text=\"CHAT\"", xaml);
         Assert.Contains("Text=\"ATTENTION CARDS\"", xaml);
@@ -76,10 +76,20 @@ public sealed class ApprovedPrototypeShellTests
         var codeBehind = File.ReadAllText(CodeBehindPath);
 
         Assert.Contains("x:Name=\"PairingFailureNotice\"", xaml);
-        Assert.Contains("Content = \"Remove\"", codeBehind);
+        Assert.Contains("Content = new SymbolIcon(Symbol.Delete)", codeBehind);
         Assert.Contains("OnRemoveDeviceClick", codeBehind);
         Assert.Contains("await _peerHost.ForgetAsync", codeBehind);
         Assert.DoesNotContain("public async void ShowPairingFailed", codeBehind);
+    }
+
+    [Fact]
+    public void BackgroundReconnectFailure_DoesNotShowAUserAlert()
+    {
+        var appPath = Path.GetFullPath(Path.Combine(Path.GetDirectoryName(XamlPath)!, "App.xaml.cs"));
+        var app = File.ReadAllText(appPath);
+
+        Assert.Contains("_userInitiatedPeerConnections.TryRemove(peerId, out _)", app);
+        Assert.Contains("if (showToUser)", app);
     }
 
     [Fact]
@@ -117,6 +127,9 @@ public sealed class ApprovedPrototypeShellTests
         Assert.Contains("ms-settings:sound-defaultinputproperties", File.ReadAllText(Path.ChangeExtension(settingsPath, ".xaml.cs")));
         Assert.Contains("ms-settings:sound-defaultoutputproperties", File.ReadAllText(Path.ChangeExtension(settingsPath, ".xaml.cs")));
         Assert.Contains("new AudioGraphDevice()", File.ReadAllText(CodeBehindPath));
+        Assert.DoesNotContain("x:Name=\"TestSpeakerButton\"", xaml);
+        Assert.Contains("x:Name=\"TestSpeakerButton\"", settingsXaml);
+        Assert.Contains("Symbol=\"Volume\"", settingsXaml);
     }
 
     [Fact]
@@ -204,6 +217,126 @@ public sealed class ApprovedPrototypeShellTests
     }
 
     [Fact]
+    public void SoleOnlineFamilyMember_IsAutomaticallySelected()
+    {
+        var codeBehind = File.ReadAllText(CodeBehindPath);
+
+        Assert.Contains("onlineApprovedPeers.Count == 1", codeBehind);
+        Assert.Contains("_selectedFamilyPeerIds.Add(onlineApprovedPeers[0].PeerId)", codeBehind);
+    }
+
+    [Fact]
+    public void FamilyRoster_UsesPresenceDotsAndIconOnlyRemoveAction()
+    {
+        var codeBehind = File.ReadAllText(CodeBehindPath);
+
+        Assert.Contains("new Microsoft.UI.Xaml.Shapes.Ellipse", codeBehind);
+        Assert.Contains("Fill = online ? AvailableGreen : DndRed", codeBehind);
+        Assert.Contains("new SymbolIcon(Symbol.Delete)", codeBehind);
+        Assert.Contains("ToolTipService.SetToolTip(remove", codeBehind);
+    }
+
+    [Fact]
+    public void FamilyRoster_DoesNotRebuildWhenItsVisibleStateIsUnchanged()
+    {
+        var codeBehind = File.ReadAllText(CodeBehindPath);
+        var snapshotGuard = codeBehind.IndexOf("if (snapshot == _renderedFamilyRosterSnapshot)", StringComparison.Ordinal);
+        var clear = codeBehind.IndexOf("DiscoveredPeersList.Children.Clear();", StringComparison.Ordinal);
+
+        Assert.True(snapshotGuard >= 0, "The family roster needs a stable-state snapshot guard.");
+        Assert.True(snapshotGuard < clear, "The snapshot guard must run before replacing visible family rows.");
+    }
+
+    [Fact]
+    public void AttentionPresets_AreLargeDirectSendButtonsWithTooltips()
+    {
+        var xaml = File.ReadAllText(XamlPath);
+        var codeBehind = File.ReadAllText(CodeBehindPath);
+
+        Assert.DoesNotContain("ComposerPresetCombo", xaml);
+        Assert.DoesNotContain("Text=\"Purpose\"", xaml);
+        Assert.Contains("Width = 64", codeBehind);
+        Assert.Contains("ToolTipService.SetToolTip(button, preset.Purpose)", codeBehind);
+        Assert.Contains("SendAttentionCardAsync(preset.Purpose, preset.Icon)", codeBehind);
+    }
+
+    [Fact]
+    public void VoiceCard_SwitchesBetweenHoldAndToggleModes()
+    {
+        var xaml = File.ReadAllText(XamlPath);
+        var codeBehind = File.ReadAllText(CodeBehindPath);
+
+        Assert.Contains("x:Name=\"VoiceModeSwitch\"", xaml);
+        Assert.Contains("OffContent=\"Hold to talk\" OnContent=\"Toggle on/off\"", xaml);
+        Assert.Contains("if (VoiceModeSwitch.IsOn)", codeBehind);
+        Assert.Contains("_handsFreeActive ? \"Turn\\nOff\" : \"Turn\\nOn\"", codeBehind);
+    }
+
+    [Fact]
+    public void GroupFloor_IsOnlyVisibleForMultiSelection()
+    {
+        var xaml = File.ReadAllText(XamlPath);
+        var codeBehind = File.ReadAllText(CodeBehindPath);
+
+        Assert.Contains("x:Name=\"GroupFloorPanel\"", xaml);
+        Assert.Contains("var groupVisible = selected.Count > 1", codeBehind);
+        Assert.Contains("GroupFloorPanel.Visibility = groupVisible", codeBehind);
+    }
+
+    [Fact]
+    public void MainRegions_FillAvailableHeightAndAttentionCardsStayAtBottom()
+    {
+        var xaml = File.ReadAllText(XamlPath);
+
+        Assert.Contains("x:Name=\"MainRegionsGrid\" Grid.Row=\"1\"", xaml);
+        Assert.Contains("x:Name=\"PrimaryRegionsRow\" Height=\"*\"", xaml);
+        Assert.Contains("x:Name=\"AttentionRegionsGrid\" Grid.Row=\"2\"", xaml);
+        Assert.Contains("VerticalAlignment=\"Bottom\"", xaml);
+    }
+
+    [Fact]
+    public void MainWindow_EnforcesContentMinimumSize()
+    {
+        var codeBehind = File.ReadAllText(CodeBehindPath);
+
+        Assert.Contains("const int MinimumWindowWidth = 1050", codeBehind);
+        Assert.Contains("const int MinimumWindowHeight = 720", codeBehind);
+        Assert.Contains("AppWin.Changed += OnAppWindowChanged", codeBehind);
+        Assert.Contains("AppWin.Resize", codeBehind);
+    }
+
+    [Fact]
+    public void AlertsOverlayTheCardWithoutAddingALayoutRow()
+    {
+        var xaml = File.ReadAllText(XamlPath);
+
+        Assert.Contains("Canvas.ZIndex=\"10\"", xaml);
+        Assert.DoesNotContain("<StackPanel Grid.Row=\"0\" Spacing=\"6\"", xaml);
+        Assert.DoesNotContain("<Grid Grid.Row=\"1\" VerticalAlignment=\"Stretch\">", xaml);
+    }
+
+    [Fact]
+    public void VoiceHeaderAlignsWithOtherColumnHeaders()
+    {
+        var xaml = File.ReadAllText(XamlPath);
+        var codeBehind = File.ReadAllText(CodeBehindPath);
+
+        Assert.Contains("Text=\"VOICE\" Style=\"{StaticResource SectionHeaderStyle}\" VerticalAlignment=\"Top\"", xaml);
+        Assert.Contains("VoicePanel.RowSpacing = groupVisible ? 14 : 0", codeBehind);
+    }
+
+    [Fact]
+    public void VoiceAndVisibleGroupFloorSplitTheirColumnEvenly()
+    {
+        var xaml = File.ReadAllText(XamlPath);
+        var codeBehind = File.ReadAllText(CodeBehindPath);
+
+        Assert.Contains("x:Name=\"GroupFloorRow\" Height=\"0\"", xaml);
+        Assert.Contains("<RowDefinition Height=\"*\"/>", xaml);
+        Assert.Contains("new GridLength(1, GridUnitType.Star)", codeBehind);
+    }
+
+    [Fact]
     public void RemotePresenceChanges_RefreshTheFamilyRosterAndShowDnd()
     {
         var codeBehind = File.ReadAllText(CodeBehindPath);
@@ -212,6 +345,37 @@ public sealed class ApprovedPrototypeShellTests
         Assert.Contains("void OnRemotePresenceChanged", codeBehind);
         Assert.Contains("Do Not Disturb", codeBehind);
         Assert.Contains("RemotePresenceLabel", codeBehind);
+    }
+
+    [Fact]
+    public void ChatCard_ExposesRichDirectChatComposerAndViewOnlyImageViewer()
+    {
+        var xaml = File.ReadAllText(XamlPath);
+        var codeBehind = File.ReadAllText(CodeBehindPath);
+        var viewerPath = Path.GetFullPath(Path.Combine(Path.GetDirectoryName(XamlPath)!, "Chat", "ChatImageViewerWindow.cs"));
+
+        Assert.Contains("x:Name=\"ChatImageButton\"", xaml);
+        Assert.Contains("x:Name=\"ChatEmojiButton\"", xaml);
+        Assert.Contains("AcceptsReturn=\"True\"", xaml);
+        Assert.Contains("Shift", codeBehind);
+        Assert.Contains("BuildMarkdownBlock", codeBehind);
+        Assert.Contains("OpenChatLinkAsync", codeBehind);
+        Assert.Contains("Group chat is not supported yet", codeBehind);
+        Assert.Contains("DisplayArea.GetFromWindowId(AppWin.Id", codeBehind);
+        Assert.Contains("RectInt32 workArea", File.ReadAllText(viewerPath));
+        Assert.DoesNotContain("Save", File.ReadAllText(viewerPath));
+    }
+
+    [Fact]
+    public void RichChat_DoesNotPutConversationContentInWindowsNotifications()
+    {
+        var codeBehind = File.ReadAllText(CodeBehindPath);
+        var incomingStart = codeBehind.IndexOf("void OnIncomingChatMessage", StringComparison.Ordinal);
+        var incomingEnd = codeBehind.IndexOf("void ShowChatChime", incomingStart, StringComparison.Ordinal);
+        var handler = codeBehind[incomingStart..incomingEnd];
+
+        Assert.DoesNotContain("ShowChatAsync", handler);
+        Assert.Contains("ChatMarkdown.Parse", handler);
     }
 
     [Fact]

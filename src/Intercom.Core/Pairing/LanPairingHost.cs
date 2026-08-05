@@ -25,6 +25,8 @@ public sealed class LanPairingHost : IAsyncDisposable
     readonly Dictionary<Guid, ActivePairing> _pairings = [];
     readonly Dictionary<Guid, TlsPairingTransport> _connections = [];
     readonly HashSet<Guid> _connecting = [];
+    readonly Dictionary<Guid, Capability> _peerCapabilities = [];
+    readonly Capability _localCapabilities;
     bool _disposed;
 
     public event Action<Guid, string>? PairingCodeReady;
@@ -45,10 +47,17 @@ public sealed class LanPairingHost : IAsyncDisposable
         lock (_gate) return _connections.TryGetValue(peerId, out var transport) ? transport.RemoteAddress : null;
     }
 
-    public LanPairingHost(IdentityStore identityStore, int listenPort, Func<SpkiPin, Guid?> resolvePeerId)
+    public Capability PeerCapabilities(Guid peerId)
+    {
+        lock (_gate) return _peerCapabilities.GetValueOrDefault(peerId, Capability.Text);
+    }
+
+    public LanPairingHost(IdentityStore identityStore, int listenPort, Func<SpkiPin, Guid?> resolvePeerId,
+        Capability localCapabilities = Capability.Text | Capability.ChatMarkdown | Capability.ChatImages | Capability.ChatTyping)
     {
         _identityStore = identityStore;
         _resolvePeerId = resolvePeerId;
+        _localCapabilities = localCapabilities;
         _listener = new SslPeerTransportListener(identityStore.Identity.Certificate, listenPort);
         _connector = new SslPeerTransportConnector(identityStore.Identity.Certificate);
         _listener.ConnectionAccepted += OnConnectionAccepted;
@@ -257,6 +266,7 @@ public sealed class LanPairingHost : IAsyncDisposable
             _connections[peerId] = transport;
         }
         WireApprovedTransport(peerId, transport, alreadyStarted: true);
+        _ = transport.SendAsync(Hello.Current(_localCapabilities).ToFrame(Guid.NewGuid()), CancellationToken.None);
     }
 
     void EstablishApprovedConnection(Guid peerId, IPeerTransportConnection connection)
@@ -272,6 +282,7 @@ public sealed class LanPairingHost : IAsyncDisposable
             _connections[peerId] = transport;
         }
         WireApprovedTransport(peerId, transport, alreadyStarted: false);
+        _ = transport.SendAsync(Hello.Current(_localCapabilities).ToFrame(Guid.NewGuid()), CancellationToken.None);
     }
 
     void WireApprovedTransport(Guid peerId, TlsPairingTransport transport, bool alreadyStarted)
@@ -285,6 +296,13 @@ public sealed class LanPairingHost : IAsyncDisposable
 
     void OnApprovedFrame(Guid peerId, TlsPairingTransport transport, ControlFrame frame)
     {
+        if (frame.Type == ControlMessageType.Hello)
+        {
+            try { lock (_gate) { _peerCapabilities[peerId] = HelloFrameCodec.Decode(frame).Capabilities; } }
+            catch (MalformedFrameException) { }
+            ConnectionsChanged?.Invoke();
+            return;
+        }
         if (frame.Type == ControlMessageType.Delivered)
         {
             if (frame.CorrelationId is Guid deliveredFor) DeliveryConfirmed?.Invoke(peerId, deliveredFor);
@@ -309,6 +327,7 @@ public sealed class LanPairingHost : IAsyncDisposable
         {
             if (!_connections.TryGetValue(peerId, out var current) || !ReferenceEquals(current, transport)) return;
             _connections.Remove(peerId);
+            _peerCapabilities.Remove(peerId);
         }
         DiagnosticLog.Current.Warning("peer.disconnected", $"peer={peerId}");
         ConnectionDropped?.Invoke(peerId);
@@ -382,6 +401,7 @@ public sealed class LanPairingHost : IAsyncDisposable
         lock (_gate)
         {
             _connections.Remove(peerId, out connection);
+            _peerCapabilities.Remove(peerId);
             _pairings.Remove(peerId, out pairing);
             _connecting.Remove(peerId);
         }
@@ -474,6 +494,7 @@ sealed class LanPeerChatTransport : IChatTransport
     public event Action<ControlFrame>? FrameReceived;
     public event Action<Guid>? DeliveryConfirmed;
     public event Action? ConnectionDropped;
+    public Capability RemoteCapabilities => _host.PeerCapabilities(_peerId);
 
     public LanPeerChatTransport(LanPairingHost host, Guid peerId)
     {
@@ -482,7 +503,13 @@ sealed class LanPeerChatTransport : IChatTransport
         host.DeliveryConfirmed += OnDelivered;
         host.ConnectionDropped += OnDropped;
     }
-    void OnFrame(Guid peerId, ControlFrame frame) { if (peerId == _peerId && frame.Type == ControlMessageType.Chat) FrameReceived?.Invoke(frame); }
+    void OnFrame(Guid peerId, ControlFrame frame)
+    {
+        if (peerId == _peerId && frame.Type is ControlMessageType.Chat or ControlMessageType.ChatTyping
+            or ControlMessageType.ChatImageStart or ControlMessageType.ChatImageChunk or ControlMessageType.ChatImageComplete
+            or ControlMessageType.ChatImageReceived or ControlMessageType.ChatImageCancelled or ControlMessageType.ChatImageFailed)
+            FrameReceived?.Invoke(frame);
+    }
     void OnDelivered(Guid peerId, Guid id) { if (peerId == _peerId) DeliveryConfirmed?.Invoke(id); }
     void OnDropped(Guid peerId) { if (peerId == _peerId) ConnectionDropped?.Invoke(); }
     public Task SendAsync(ControlFrame frame, CancellationToken cancellationToken) => _host.SendAsync(_peerId, frame, cancellationToken);

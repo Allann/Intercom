@@ -7,10 +7,13 @@ namespace Intercom.App;
 public sealed partial class SettingsDialog : ContentDialog
 {
     bool _loading;
+    readonly Action? _testSpeaker;
 
-    public SettingsDialog()
+    public SettingsDialog(Action? testSpeaker = null)
     {
         InitializeComponent();
+        _testSpeaker = testSpeaker;
+        TestSpeakerButton.IsEnabled = testSpeaker is not null;
         _loading = true;
         var configured = AudioMeasurementSettings.Load().ToConfigValue();
         AudioMeasurementProfileCombo.SelectedItem = AudioMeasurementProfileCombo.Items
@@ -23,6 +26,8 @@ public sealed partial class SettingsDialog : ContentDialog
 
     async void OnOpenSpeakerSettingsClick(object sender, Microsoft.UI.Xaml.RoutedEventArgs e) =>
         await Windows.System.Launcher.LaunchUriAsync(new Uri("ms-settings:sound-defaultoutputproperties"));
+
+    void OnTestSpeakerClick(object sender, Microsoft.UI.Xaml.RoutedEventArgs e) => _testSpeaker?.Invoke();
 
     async void OnAudioLifecycleTestClick(object sender, Microsoft.UI.Xaml.RoutedEventArgs e)
     {

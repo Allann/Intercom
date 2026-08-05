@@ -24,4 +24,7 @@ public enum Capability
     SpokenChat = 1 << 4,
     GroupFloor = 1 << 5,
     AttentionCards = 1 << 6,
+    ChatMarkdown = 1 << 7,
+    ChatImages = 1 << 8,
+    ChatTyping = 1 << 9,
 }

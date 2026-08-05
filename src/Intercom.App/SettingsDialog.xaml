@@ -9,6 +9,10 @@
         <TextBlock Text="Intercom uses the default communications devices selected in Windows. Changes apply to the next voice connection." TextWrapping="Wrap" Opacity="0.75"/>
         <Button Content="Open microphone settings" HorizontalAlignment="Stretch" Click="OnOpenMicrophoneSettingsClick"/>
         <Button Content="Open speaker settings" HorizontalAlignment="Stretch" Click="OnOpenSpeakerSettingsClick"/>
+        <Button x:Name="TestSpeakerButton" Width="44" Height="44" HorizontalAlignment="Left" Click="OnTestSpeakerClick">
+            <SymbolIcon Symbol="Volume"/>
+            <ToolTipService.ToolTip><ToolTip Content="Test selected speaker"/></ToolTipService.ToolTip>
+        </Button>
         <TextBlock Text="AUDIO LIFECYCLE TEST" FontSize="12" FontWeight="Bold" Foreground="#FFB6502F" Margin="0,8,0,0"/>
         <TextBlock Text="Starts and stops a real AudioGraph and loopback UDP session 100 times, then reports managed/private memory, handle types, threads, device changes, and port cleanup. This can take a few minutes." TextWrapping="Wrap" Opacity="0.75"/>
         <Button x:Name="AudioLifecycleTestButton" Content="Run 100-cycle audio test" HorizontalAlignment="Stretch" Click="OnAudioLifecycleTestClick"/>

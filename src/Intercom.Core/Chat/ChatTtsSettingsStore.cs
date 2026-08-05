@@ -5,8 +5,8 @@ namespace Intercom.Chat;
 /// <summary>
 /// Persists which approved peers have spoken chat (local text-to-speech on
 /// receipt) turned on — issue #24's "optional per receiving peer" TTS
-/// requirement. Keyed by peer ID, defaulting to off for any peer never
-/// explicitly toggled on.
+/// requirement. Keyed by peer ID, defaulting to on for a peer that has never
+/// been explicitly changed, while persisting both enabled and disabled choices.
 ///
 /// Not DPAPI-protected, for the same reasoning <c>Intercom.Presence.DndSettingsStore</c>
 /// gives for its own plain-JSON choice: a set of peer IDs with a boolean
@@ -18,14 +18,14 @@ namespace Intercom.Chat;
 ///
 /// Also mirrors DndSettingsStore's simpler fail-safe rule rather than
 /// IdentityStore's corruption-vs-transient-failure distinction: the cost of
-/// misjudging a read failure here is TTS silently defaulting to off for one
+/// misjudging a read failure here is TTS defaulting to on for one
 /// launch, not fleet-wide re-pairing.
 /// </summary>
 public sealed class ChatTtsSettingsStore
 {
     readonly string _path;
     readonly object _gate = new();
-    readonly HashSet<Guid> _enabledPeerIds = [];
+    readonly Dictionary<Guid, bool> _peerEnabled = [];
     string? _selectedVoiceId;
 
     public ChatTtsSettingsStore(string? appDataDirectory = null)
@@ -51,23 +51,24 @@ public sealed class ChatTtsSettingsStore
         get { lock (_gate) { return _selectedVoiceId; } }
     }
 
-    /// <summary>Loads the persisted set, or leaves everything off (and the
+    /// <summary>Loads the persisted choices, or leaves the default on (and the
     /// voice unset) if the file is missing or unreadable. Call once at
     /// startup.</summary>
     public void Load()
     {
         lock (_gate)
         {
-            _enabledPeerIds.Clear();
+            _peerEnabled.Clear();
             var dto = TryRead();
-            foreach (var id in dto.EnabledPeerIds) _enabledPeerIds.Add(id);
+            foreach (var pair in dto.PeerEnabled) _peerEnabled[pair.Key] = pair.Value;
+            foreach (var id in dto.EnabledPeerIds) _peerEnabled.TryAdd(id, true);
             _selectedVoiceId = dto.SelectedVoiceId;
         }
     }
 
     public bool IsEnabled(Guid peerId)
     {
-        lock (_gate) { return _enabledPeerIds.Contains(peerId); }
+        lock (_gate) { return !_peerEnabled.TryGetValue(peerId, out var enabled) || enabled; }
     }
 
     public void SetEnabled(Guid peerId, bool enabled)
@@ -75,7 +76,8 @@ public sealed class ChatTtsSettingsStore
         bool changed;
         lock (_gate)
         {
-            changed = enabled ? _enabledPeerIds.Add(peerId) : _enabledPeerIds.Remove(peerId);
+            changed = _peerEnabled.TryGetValue(peerId, out var current) ? current != enabled : !enabled;
+            if (changed) _peerEnabled[peerId] = enabled;
             if (changed) Persist();
         }
         if (changed) Changed?.Invoke(peerId, enabled);
@@ -101,14 +103,14 @@ public sealed class ChatTtsSettingsStore
         }
         catch (Exception ex) when (ex is JsonException or IOException or UnauthorizedAccessException)
         {
-            System.Diagnostics.Debug.WriteLine($"Chat TTS settings unreadable ({ex.GetType().Name}); defaulting to all off.");
+            System.Diagnostics.Debug.WriteLine($"Chat TTS settings unreadable ({ex.GetType().Name}); defaulting to on.");
             return new ChatTtsDto();
         }
     }
 
     void Persist()
     {
-        var json = JsonSerializer.Serialize(new ChatTtsDto { EnabledPeerIds = [.. _enabledPeerIds], SelectedVoiceId = _selectedVoiceId });
+        var json = JsonSerializer.Serialize(new ChatTtsDto { PeerEnabled = new(_peerEnabled), SelectedVoiceId = _selectedVoiceId });
         var tempPath = _path + ".tmp";
         File.WriteAllText(tempPath, json);
         File.Move(tempPath, _path, overwrite: true);
@@ -117,6 +119,7 @@ public sealed class ChatTtsSettingsStore
     sealed class ChatTtsDto
     {
         public List<Guid> EnabledPeerIds { get; set; } = [];
+        public Dictionary<Guid, bool> PeerEnabled { get; set; } = [];
         public string? SelectedVoiceId { get; set; }
     }
 }

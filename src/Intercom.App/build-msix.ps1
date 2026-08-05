@@ -59,6 +59,15 @@ if ($LASTEXITCODE -ne 0) {
     throw "MSIX build failed with exit code $LASTEXITCODE."
 }
 
+$testPackageDirectory = Get-ChildItem -LiteralPath $artifactsDirectory -Directory -Filter 'Intercom.App_*_x64_Test' |
+    Sort-Object LastWriteTime -Descending |
+    Select-Object -First 1
+if ($testPackageDirectory) {
+    Copy-Item -LiteralPath (Join-Path $projectDirectory 'INSTALL-FOR-FRIEND.md') `
+        -Destination (Join-Path $testPackageDirectory.FullName 'INSTALL-FOR-FRIEND.md') `
+        -Force
+}
+
 Write-Host "Signed MSIX output: $artifactsDirectory"
 Write-Host "Signing certificate: $($certificate.Thumbprint)"
 Write-Host "Public certificate: $publicCertificate"

@@ -20,26 +20,26 @@ public class ChatTtsSettingsStoreTests : IDisposable
     }
 
     [Fact]
-    public void Load_NoFileYet_EveryPeerDefaultsToOff()
+    public void Load_NoFileYet_EveryPeerDefaultsToOn()
     {
         var store = new ChatTtsSettingsStore(_dir);
         store.Load();
 
-        Assert.False(store.IsEnabled(Guid.NewGuid()));
+        Assert.True(store.IsEnabled(Guid.NewGuid()));
     }
 
     [Fact]
-    public void SetEnabled_PersistsAcrossFreshLoad()
+    public void SetDisabled_PersistsAcrossFreshLoad()
     {
         var peerId = Guid.NewGuid();
         var store = new ChatTtsSettingsStore(_dir);
         store.Load();
 
-        store.SetEnabled(peerId, true);
+        store.SetEnabled(peerId, false);
 
         var reloaded = new ChatTtsSettingsStore(_dir);
         reloaded.Load();
-        Assert.True(reloaded.IsEnabled(peerId));
+        Assert.False(reloaded.IsEnabled(peerId));
     }
 
     [Fact]
@@ -53,7 +53,7 @@ public class ChatTtsSettingsStoreTests : IDisposable
         store.SetEnabled(peerA, true);
 
         Assert.True(store.IsEnabled(peerA));
-        Assert.False(store.IsEnabled(peerB));
+        Assert.True(store.IsEnabled(peerB));
     }
 
     [Fact]
@@ -62,7 +62,7 @@ public class ChatTtsSettingsStoreTests : IDisposable
         var peerId = Guid.NewGuid();
         var store = new ChatTtsSettingsStore(_dir);
         store.Load();
-        store.SetEnabled(peerId, true);
+        store.SetEnabled(peerId, false);
 
         store.SetEnabled(peerId, false);
 
@@ -73,14 +73,14 @@ public class ChatTtsSettingsStoreTests : IDisposable
     }
 
     [Fact]
-    public void SetEnabled_SameValue_DoesNotRaiseChanged()
+    public void SetEnabled_DefaultOn_DoesNotRaiseChanged()
     {
         var store = new ChatTtsSettingsStore(_dir);
         store.Load();
         var raised = 0;
         store.Changed += (_, _) => raised++;
 
-        store.SetEnabled(Guid.NewGuid(), false); // already off — no-op
+        store.SetEnabled(Guid.NewGuid(), true); // already on by default — no-op
 
         Assert.Equal(0, raised);
     }
@@ -94,10 +94,10 @@ public class ChatTtsSettingsStoreTests : IDisposable
         (Guid PeerId, bool Enabled)? observed = null;
         store.Changed += (id, enabled) => observed = (id, enabled);
 
-        store.SetEnabled(peerId, true);
+        store.SetEnabled(peerId, false);
 
         Assert.Equal(peerId, observed!.Value.PeerId);
-        Assert.True(observed.Value.Enabled);
+        Assert.False(observed.Value.Enabled);
     }
 
     [Fact]
@@ -147,6 +147,6 @@ public class ChatTtsSettingsStoreTests : IDisposable
         var store = new ChatTtsSettingsStore(_dir);
         store.Load();
 
-        Assert.False(store.IsEnabled(Guid.NewGuid()));
+        Assert.True(store.IsEnabled(Guid.NewGuid()));
     }
 }

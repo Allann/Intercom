@@ -260,8 +260,10 @@ public sealed class AttentionCardToastPresenter : IDisposable
     {
         var arguments = args.Arguments;
         if (arguments is null) return;
-        if (!arguments.TryGetValue("cardId", out var cardIdText) || !Guid.TryParse(cardIdText, out var cardId)) return;
         var action = arguments.TryGetValue("action", out var a) ? a : "Open";
+        var cardId = Guid.Empty;
+        var hasCardId = arguments.TryGetValue("cardId", out var cardIdText) && Guid.TryParse(cardIdText, out cardId);
+        if (action != "Open" && !hasCardId) return;
 
         // Never assume which thread this arrived on (see class remarks) —
         // always marshal before touching anything UI-adjacent, mirroring

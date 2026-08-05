@@ -46,9 +46,29 @@ A peer reachable through a routed private network but not necessarily visible to
 
 A direct or group exchange between peers. Voice is preferred when available; text chat remains available as the fallback. Chat messages are confirmed only by delivery (the message reached the recipient's device); there is no read receipt or acknowledgement step for chat, unlike an attention card.
 
+## Ephemeral conversation content
+
+Content exchanged in a conversation—including chat text, shared links, shared images, voice, and attention-card history—is not retained after the app exits. This does not include durable app state such as peer identity, pairing and trust records, contacts, or settings.
+
+## Shared link
+
+An HTTPS URL included in a chat message that the recipient can choose to open. A shared link is displayed as part of the message without fetching or displaying a preview of the linked content. Other URL schemes are not actionable in chat. When a link's visible label hides its destination, the recipient confirms the actual destination before it opens.
+
+## Shared image
+
+A static image sent as chat content and displayed inline as a thumbnail. A chat message contains at most one shared image and may include a Chat Markdown caption. The shared image is optimized for chat rather than preserved as an exact copy of the source file, while transparency and crisp graphical content are retained when needed. The recipient can enlarge it up to the usable area of their display while the image keeps its original proportions.
+
+## Chat Markdown
+
+The limited formatting language available in chat messages: bold, italic, strikethrough, inline code, fenced code blocks, bulleted and numbered lists, block quotes, and shared links. It excludes headings, tables, raw HTML, and Markdown image syntax. The original Markdown text remains the message content.
+
+## Typing indicator
+
+An ephemeral signal that someone is actively composing a chat message. It expires automatically and is never treated as a chat message, given a delivery state, retained as conversation content, or written to persistent logs.
+
 ## Spoken chat
 
-Text chat rendered aloud on the receiving device using an installed Windows speech-synthesis voice. Spoken chat is optional per receiving peer and does not send synthesized audio across the network.
+Chat content rendered aloud on the receiving device using an installed Windows speech-synthesis voice. Spoken chat is optional per receiving peer and does not send synthesized audio across the network. Formatting syntax is omitted from speech; links are identified by their visible label or hostname, and a shared image is announced with its caption when present.
 
 ## Push-to-talk
 

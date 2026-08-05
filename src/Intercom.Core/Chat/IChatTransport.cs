@@ -14,6 +14,7 @@ namespace Intercom.Chat;
 /// </summary>
 public interface IChatTransport
 {
+    Capability RemoteCapabilities => Capability.Text | Capability.ChatMarkdown | Capability.ChatImages | Capability.ChatTyping;
     /// <summary>Raised for every inbound Chat-type frame already past
     /// <c>FrameDispatcher</c>'s ordering/trust checks.</summary>
     event Action<ControlFrame>? FrameReceived;
@@ -43,7 +44,10 @@ public sealed class PeerControlChannelChatTransport : IChatTransport
         _channel = channel;
         _channel.MessageReceived += frame =>
         {
-            if (frame.Type == ControlMessageType.Chat) FrameReceived?.Invoke(frame);
+            if (frame.Type is ControlMessageType.Chat or ControlMessageType.ChatTyping
+                or ControlMessageType.ChatImageStart or ControlMessageType.ChatImageChunk or ControlMessageType.ChatImageComplete
+                or ControlMessageType.ChatImageReceived or ControlMessageType.ChatImageCancelled or ControlMessageType.ChatImageFailed)
+                FrameReceived?.Invoke(frame);
         };
         _channel.DeliveryConfirmed += id => DeliveryConfirmed?.Invoke(id);
         _channel.StateChanged += (previous, next) =>
@@ -86,6 +90,7 @@ public sealed class PeerControlChannelChatTransport : IChatTransport
 /// </summary>
 public sealed class LoopbackChatTransport : IChatTransport
 {
+    public Capability RemoteCapabilities => Capability.Text | Capability.ChatMarkdown | Capability.ChatImages | Capability.ChatTyping;
     readonly FrameDispatcher _dispatcher;
 
     public LoopbackChatTransport? Peer { get; set; }
