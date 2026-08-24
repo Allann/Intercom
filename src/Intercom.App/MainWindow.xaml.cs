@@ -1206,7 +1206,6 @@ public sealed partial class MainWindow : Window, IResidentWindow
 
     void OnChatSendClick(object sender, RoutedEventArgs e)
     {
-        DiagnosticLog.Current.Info("chat.send-debug", $"[DEBUG-emoji-send] clicked textLength={ChatInputBox.Text.Length} pendingImage={_pendingChatImage is not null}");
         _ = SendChatAsync();
     }
 
@@ -1222,7 +1221,6 @@ public sealed partial class MainWindow : Window, IResidentWindow
     async Task SendChatAsync()
     {
         var text = ChatInputBox.Text;
-        DiagnosticLog.Current.Info("chat.send-debug", $"[DEBUG-emoji-send] entered textLength={text.Length} runeCount={text.EnumerateRunes().Count()} pendingImage={_pendingChatImage is not null}");
         if (_pendingChatImage is null && string.IsNullOrWhiteSpace(text)) return;
         if (text.Length > (_pendingChatImage is null ? RichChatService.MaxMessageCharacters : RichChatService.MaxCaptionCharacters)) return;
         if (_selectedFamilyPeerIds.Count != 1) return;
@@ -1230,19 +1228,16 @@ public sealed partial class MainWindow : Window, IResidentWindow
         if (_peerHost?.ConnectedPeerIds.Contains(peerId) != true || !_chatServices.TryGetValue(peerId, out var service)) return;
 
         var image = _pendingChatImage;
-        DiagnosticLog.Current.Info("chat.send-debug", "[DEBUG-emoji-send] clearing-composer");
         ClearPendingChatImage();
         ChatInputBox.Text = "";
-        DiagnosticLog.Current.Info("chat.send-debug", "[DEBUG-emoji-send] composer-cleared");
         try
         {
             if (image is null) await service.SendTextAsync(text, CancellationToken.None);
             else await service.SendImageAsync(image, text, CancellationToken.None);
-            DiagnosticLog.Current.Info("chat.send-debug", "[DEBUG-emoji-send] service-send-completed");
         }
         catch (Exception ex)
         {
-            DiagnosticLog.Current.Error("chat.send-failed", "[DEBUG-emoji-send] service-send-failed", ex);
+            DiagnosticLog.Current.Error("chat.send-failed", "Chat send failed.", ex);
         }
     }
 
@@ -1418,7 +1413,6 @@ public sealed partial class MainWindow : Window, IResidentWindow
 
     void RenderChatMessages()
     {
-        DiagnosticLog.Current.Info("chat.render-debug", "[DEBUG-emoji-send] render-entered");
         try
         {
             RenderChatMessagesCore();
@@ -1430,9 +1424,8 @@ public sealed partial class MainWindow : Window, IResidentWindow
             // uncaught exception here becomes a stowed exception and hard-
             // crashes the process (observed as CoreMessagingXP.dll faults,
             // code 0xc000027b) instead of reaching that handler.
-            DiagnosticLog.Current.Error("chat.render-failed", "[DEBUG-emoji-send] render-crashed", ex);
+            DiagnosticLog.Current.Error("chat.render-failed", "Chat rendering failed.", ex);
         }
-        DiagnosticLog.Current.Info("chat.render-debug", "[DEBUG-emoji-send] render-completed");
     }
 
     void RenderChatMessagesCore()
@@ -1523,14 +1516,15 @@ public sealed partial class MainWindow : Window, IResidentWindow
             }
             else if (inline is ChatTextRun text)
             {
-                paragraph.Inlines.Add(new Run
+                var run = new Run
                 {
                     Text = text.Text,
                     FontWeight = text.Bold ? FontWeights.Bold : FontWeights.Normal,
                     FontStyle = text.Italic ? Windows.UI.Text.FontStyle.Italic : Windows.UI.Text.FontStyle.Normal,
                     TextDecorations = text.Strikethrough ? Windows.UI.Text.TextDecorations.Strikethrough : Windows.UI.Text.TextDecorations.None,
-                    FontFamily = text.Code ? new FontFamily("Consolas") : null,
-                });
+                };
+                if (text.Code) run.FontFamily = new FontFamily("Consolas");
+                paragraph.Inlines.Add(run);
             }
         }
         block.Blocks.Add(paragraph);

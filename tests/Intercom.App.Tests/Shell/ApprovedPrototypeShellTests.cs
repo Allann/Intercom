@@ -180,6 +180,15 @@ public sealed class ApprovedPrototypeShellTests
     }
 
     [Fact]
+    public void PlainChatText_DoesNotAssignANullFontFamily()
+    {
+        var codeBehind = File.ReadAllText(CodeBehindPath);
+
+        Assert.DoesNotContain("FontFamily = text.Code ? new FontFamily(\"Consolas\") : null", codeBehind);
+        Assert.Contains("if (text.Code) run.FontFamily = new FontFamily(\"Consolas\");", codeBehind);
+    }
+
+    [Fact]
     public void MainLayout_UsesResponsiveColumnsAndReflowBreakpoints()
     {
         var xaml = File.ReadAllText(XamlPath);
