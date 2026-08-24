@@ -36,7 +36,8 @@ public sealed class GroupFloorServiceTests
 
         transport.Receive(Guid.NewGuid(), GroupFloorFrameCodec.Encode(command));
 
-        Assert.NotNull(rejected);
+        var error = Assert.IsType<InvalidOperationException>(rejected);
+        Assert.Equal("Group-floor actor does not match its authenticated sender.", error.Message);
         Assert.Empty(service.Session.RaiseHandQueue);
     }
 
@@ -53,6 +54,70 @@ public sealed class GroupFloorServiceTests
 
         Assert.Equal(lowest, service.Session.CoordinatorPeerId);
         Assert.Empty(transport.Sent);
+    }
+
+    [Fact]
+    public void ReceivedJoinAppliesStatePreparesAudioAndRaisesStateChanged()
+    {
+        var local = Guid.Parse("00000000-0000-0000-0000-000000000001");
+        var remote = Guid.Parse("ffffffff-ffff-ffff-ffff-ffffffffffff");
+        var transport = new FakeTransport();
+        var audio = new FakeAudioPreparer();
+        using var service = new GroupFloorService(local, new GroupFloorSession(Guid.NewGuid(), local, [local]), transport, audio);
+        var changes = 0;
+        service.StateChanged += () => changes++;
+
+        transport.Receive(remote, GroupFloorFrameCodec.Encode(new(service.Session.SessionId, GroupFloorCommandKind.Join, remote, remote)));
+
+        Assert.Contains(remote, service.Session.Participants);
+        Assert.Equal([remote], audio.Prepared);
+        Assert.Equal(1, changes);
+    }
+
+    [Fact]
+    public void ReceivedJoinDoesNotPrepareAudioWhenLocalPeerIsNotCoordinator()
+    {
+        var local = Guid.Parse("ffffffff-ffff-ffff-ffff-ffffffffffff");
+        var remote = Guid.Parse("00000000-0000-0000-0000-000000000001");
+        var transport = new FakeTransport();
+        var audio = new FakeAudioPreparer();
+        using var service = new GroupFloorService(local, new GroupFloorSession(Guid.NewGuid(), local, [local]), transport, audio);
+
+        transport.Receive(remote, GroupFloorFrameCodec.Encode(new(service.Session.SessionId, GroupFloorCommandKind.Join, remote, remote)));
+
+        Assert.Empty(audio.Prepared);
+    }
+
+    [Fact]
+    public void ReceivedJoinDoesNotPrepareAudioForTheLocalPeer()
+    {
+        var local = Guid.NewGuid();
+        var transport = new FakeTransport();
+        var audio = new FakeAudioPreparer();
+        using var service = new GroupFloorService(local, new GroupFloorSession(Guid.NewGuid(), local, [local]), transport, audio);
+
+        transport.Receive(local, GroupFloorFrameCodec.Encode(new(service.Session.SessionId, GroupFloorCommandKind.Join, local, local)));
+
+        Assert.Empty(audio.Prepared);
+    }
+
+    [Fact]
+    public void ReceivedNonJoinDoesNotPrepareAudioAndDisposeStopsReception()
+    {
+        var local = Guid.Parse("00000000-0000-0000-0000-000000000001");
+        var remote = Guid.Parse("ffffffff-ffff-ffff-ffff-ffffffffffff");
+        var transport = new FakeTransport();
+        var audio = new FakeAudioPreparer();
+        var session = new GroupFloorSession(Guid.NewGuid(), local, [local, remote]);
+        var service = new GroupFloorService(local, session, transport, audio);
+        var frame = GroupFloorFrameCodec.Encode(new GroupFloorCommand(session.SessionId, GroupFloorCommandKind.RaiseHand, remote, remote));
+
+        transport.Receive(remote, frame);
+        service.Dispose();
+        transport.Receive(remote, GroupFloorFrameCodec.Encode(new(session.SessionId, GroupFloorCommandKind.LowerHand, remote, remote)));
+
+        Assert.Empty(audio.Prepared);
+        Assert.Equal([remote], session.RaiseHandQueue);
     }
 
     sealed class FakeTransport : IGroupFloorTransport

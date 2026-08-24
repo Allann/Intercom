@@ -1630,23 +1630,21 @@ public sealed partial class MainWindow : Window, IResidentWindow
             }
 
             var from = _identityStore?.ApprovedPeers.FirstOrDefault(peer => peer.PeerId == peerId)?.FriendlyName ?? "a family member";
-            if (_attentionCardToastPresenter is null)
-            {
-                DiagnosticLog.Current.Warning("attention-card.toast-failed", $"card={card.MessageId} reason=presenter-unavailable");
-                ShowIncomingAttentionFallback(card, from);
-                return;
-            }
+            var observation = await AttentionCardToastObservation.ObserveAsync(
+                _attentionCardToastPresenter is null
+                    ? null
+                    : () => _attentionCardToastPresenter.ShowAsync(card, fromLabel: from));
+            if (observation.Status == AttentionCardToastObservationStatus.Submitted)
+                DiagnosticLog.Current.Info("attention-card.toast-submitted",
+                    $"card={card.MessageId} from={peerId} setting={observation.Setting}");
+            else if (observation.Status == AttentionCardToastObservationStatus.Blocked)
+                DiagnosticLog.Current.Info("attention-card.toast-blocked",
+                    $"card={card.MessageId} from={peerId} setting={observation.Setting}");
+            else
+                DiagnosticLog.Current.Error("attention-card.toast-failed",
+                    $"card={card.MessageId} from={peerId}", observation.Error);
 
-            try
-            {
-                await _attentionCardToastPresenter.ShowAsync(card, fromLabel: from);
-                DiagnosticLog.Current.Info("attention-card.toast-shown", $"card={card.MessageId} from={peerId}");
-            }
-            catch (Exception ex)
-            {
-                DiagnosticLog.Current.Error("attention-card.toast-failed", $"card={card.MessageId} from={peerId}", ex);
-                ShowIncomingAttentionFallback(card, from);
-            }
+            if (observation.RequiresFallback) ShowIncomingAttentionFallback(card, from);
         });
     }
 

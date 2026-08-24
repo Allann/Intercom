@@ -59,4 +59,29 @@ public class LoopbackAttentionCardTransportTests
 
         Assert.Equal(AttentionCardDeliveryState.Undelivered, serviceA.Conversation.Cards.Single().DeliveryState);
     }
+
+    [Fact]
+    public async Task ResolvedReceiptRaisesOnlyWhenItHasACorrelationId()
+    {
+        var (a, b) = LoopbackAttentionCardTransport.CreatePair();
+        var resolved = new List<Guid>();
+        a.Resolved += resolved.Add;
+        var correlationId = Guid.NewGuid();
+
+        await b.SendAsync(new Intercom.ControlChannel.ControlFrame
+        {
+            Type = Intercom.ControlChannel.ControlMessageType.Resolved,
+            MessageId = Guid.NewGuid(),
+            CorrelationId = correlationId,
+            Payload = [],
+        }, CancellationToken.None);
+        await b.SendAsync(new Intercom.ControlChannel.ControlFrame
+        {
+            Type = Intercom.ControlChannel.ControlMessageType.Resolved,
+            MessageId = Guid.NewGuid(),
+            Payload = [],
+        }, CancellationToken.None);
+
+        Assert.Equal([correlationId], resolved);
+    }
 }

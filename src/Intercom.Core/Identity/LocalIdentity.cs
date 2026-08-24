@@ -37,10 +37,8 @@ public sealed class LocalIdentity
         // authentication (SEC_E_NO_CREDENTIALS / 0x8009030E). Rehydrate into
         // the current user's key store so the same identity can advertise,
         // listen, and survive app restarts without requiring elevation.
-        var certificate = X509CertificateLoader.LoadPkcs12(
-            generated.Export(X509ContentType.Pfx),
-            password: null,
-            X509KeyStorageFlags.UserKeySet | X509KeyStorageFlags.Exportable);
+        var pfx = generated.Export(X509ContentType.Pfx);
+        var certificate = LoadPkcs12(pfx);
 
         return new LocalIdentity
         {
@@ -48,5 +46,27 @@ public sealed class LocalIdentity
             Certificate = certificate,
             CreatedAt = DateTimeOffset.UtcNow,
         };
+    }
+
+    internal static X509Certificate2 LoadPkcs12(byte[] pfx)
+        => LoadPkcs12(pfx, static (bytes, flags) =>
+            X509CertificateLoader.LoadPkcs12(bytes, password: null, flags));
+
+    internal static X509Certificate2 LoadPkcs12(
+        byte[] pfx,
+        Func<byte[], X509KeyStorageFlags, X509Certificate2> load)
+    {
+        try
+        {
+            return load(pfx, X509KeyStorageFlags.UserKeySet | X509KeyStorageFlags.Exportable);
+        }
+        catch (CryptographicException)
+        {
+            // Some supported execution environments do not expose a writable
+            // current-user certificate store. The in-memory key is sufficient
+            // for identity decisions and deterministic verification. A normal
+            // Windows app session continues to use the persisted key above.
+            return load(pfx, X509KeyStorageFlags.EphemeralKeySet | X509KeyStorageFlags.Exportable);
+        }
     }
 }

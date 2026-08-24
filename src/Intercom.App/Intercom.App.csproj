@@ -27,6 +27,7 @@
   </ItemGroup>
   <ItemGroup>
     <ProjectReference Include="..\Intercom.Core\Intercom.Core.csproj" />
+    <ProjectReference Include="..\Intercom.App.Runtime\Intercom.App.Runtime.csproj" />
   </ItemGroup>
   <ItemGroup>
     <Content Include="Assets\**">

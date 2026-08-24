@@ -6,6 +6,16 @@ namespace Intercom.App.Tests.Audio;
 public sealed class AudioMeasurementProfileTests
 {
     [Theory]
+    [InlineData(AudioMeasurementProfile.Disabled, "disabled")]
+    [InlineData(AudioMeasurementProfile.Clean, "clean")]
+    [InlineData(AudioMeasurementProfile.Loss1Percent, "loss1")]
+    [InlineData(AudioMeasurementProfile.Loss5Percent, "loss5")]
+    [InlineData(AudioMeasurementProfile.Burst, "burst")]
+    [InlineData((AudioMeasurementProfile)999, "disabled")]
+    public void ToConfigValue_MapsEveryProfileAndUnknownValues(AudioMeasurementProfile profile, string expected) =>
+        Assert.Equal(expected, profile.ToConfigValue());
+
+    [Theory]
     [InlineData("clean", AudioMeasurementProfile.Clean)]
     [InlineData("loss1", AudioMeasurementProfile.Loss1Percent)]
     [InlineData("loss5", AudioMeasurementProfile.Loss5Percent)]

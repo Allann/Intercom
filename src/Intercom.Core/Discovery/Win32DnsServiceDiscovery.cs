@@ -34,6 +34,17 @@ namespace Intercom.Discovery;
 /// </summary>
 public sealed class Win32DnsServiceDiscovery : IDnsServiceDiscovery
 {
+    readonly IDnsServiceNativeApi _native;
+    readonly Action? _beforeResolveCache;
+
+    public Win32DnsServiceDiscovery() : this(new Win32DnsServiceNativeApi()) { }
+
+    internal Win32DnsServiceDiscovery(IDnsServiceNativeApi native, Action? beforeResolveCache = null)
+    {
+        _native = native ?? throw new ArgumentNullException(nameof(native));
+        _beforeResolveCache = beforeResolveCache;
+    }
+
     public IDisposable Register(LanInterface iface, ServiceAdvertisement advertisement)
     {
         var interfaceIndex = iface.Ipv4InterfaceIndex ?? iface.Ipv6InterfaceIndex ?? 0;
@@ -43,7 +54,7 @@ public sealed class Win32DnsServiceDiscovery : IDnsServiceDiscovery
         var ipv4 = iface.UnicastAddresses.FirstOrDefault(a => a.AddressFamily == System.Net.Sockets.AddressFamily.InterNetwork);
         var ipv6 = iface.UnicastAddresses.FirstOrDefault(a => a.AddressFamily == System.Net.Sockets.AddressFamily.InterNetworkV6);
 
-        return new ServiceRegistration(instanceName, hostName, ipv4, ipv6, advertisement.Port, advertisement.PeerIdHint, advertisement.Spki, interfaceIndex);
+        return new ServiceRegistration(_native, instanceName, hostName, ipv4, ipv6, advertisement.Port, advertisement.PeerIdHint, advertisement.Spki, interfaceIndex);
     }
 
     public IDisposable Browse(LanInterface iface, Action<DiscoverySignal> onSignal)
@@ -60,7 +71,7 @@ public sealed class Win32DnsServiceDiscovery : IDnsServiceDiscovery
         // the first place.
         var ipv6ScopeId = iface.Ipv6InterfaceIndex ?? interfaceIndex;
         var queryName = $"{DiscoveryProtocol.ServiceType}.{DiscoveryProtocol.Domain}";
-        return new ServiceBrowse(queryName, iface.Id, interfaceIndex, ipv6ScopeId, onSignal);
+        return new ServiceBrowse(_native, queryName, iface.Id, interfaceIndex, ipv6ScopeId, onSignal, _beforeResolveCache);
     }
 
     // ---- DNS_RECORD header (x64) ----
@@ -114,6 +125,7 @@ public sealed class Win32DnsServiceDiscovery : IDnsServiceDiscovery
     /// </summary>
     sealed class ServiceRegistration : IDisposable
     {
+        readonly IDnsServiceNativeApi _native;
         readonly DNS_SERVICE_REGISTER_COMPLETE _callback; // kept alive for the lifetime of the native request
         DNS_SERVICE_REGISTER_REQUEST _request;
         GCHandle _selfHandle;
@@ -124,8 +136,9 @@ public sealed class Win32DnsServiceDiscovery : IDnsServiceDiscovery
         int _expectedCompletions = 1; // register only, until Dispose() bumps this to 2
         int _completionsSeen;
 
-        public ServiceRegistration(string instanceName, string hostName, IPAddress? ipv4, IPAddress? ipv6, int port, PeerIdHint peerIdHint, SpkiPin? spki, int interfaceIndex)
+        public ServiceRegistration(IDnsServiceNativeApi native, string instanceName, string hostName, IPAddress? ipv4, IPAddress? ipv6, int port, PeerIdHint peerIdHint, SpkiPin? spki, int interfaceIndex)
         {
+            _native = native;
             _callback = OnCompletion;
             _selfHandle = GCHandle.Alloc(this);
             var txt = new Dictionary<string, string>
@@ -154,7 +167,7 @@ public sealed class Win32DnsServiceDiscovery : IDnsServiceDiscovery
                 unicastEnabled = false,
             };
 
-            var status = DnsServiceRegister(ref _request, IntPtr.Zero);
+            var status = _native.Register(ref _request);
             if (status != DnsQueryResultsFalse && status != DnsRequestPending)
             {
                 // The request was never actually queued, so no completion
@@ -173,7 +186,7 @@ public sealed class Win32DnsServiceDiscovery : IDnsServiceDiscovery
         /// we expect (see the class remarks).</summary>
         void OnCompletion(uint status, IntPtr context, IntPtr instance)
         {
-            if (instance != IntPtr.Zero) DnsServiceFreeInstance(instance);
+            if (instance != IntPtr.Zero) _native.FreeInstance(instance);
             if (status != DnsQueryResultsFalse)
             {
                 System.Diagnostics.Debug.WriteLine($"DnsService register/deregister completion reported status {status}.");
@@ -195,7 +208,7 @@ public sealed class Win32DnsServiceDiscovery : IDnsServiceDiscovery
                 _expectedCompletions = 2;
             }
 
-            var status = DnsServiceDeRegister(ref _request, IntPtr.Zero);
+            var status = _native.Deregister(ref _request);
 
             lock (_gate)
             {
@@ -253,12 +266,14 @@ public sealed class Win32DnsServiceDiscovery : IDnsServiceDiscovery
     /// GC collecting a delegate the OS still holds a raw pointer to.</summary>
     sealed class ServiceBrowse : IDisposable
     {
+        readonly IDnsServiceNativeApi _native;
         readonly DNS_SERVICE_BROWSE_CALLBACK _browseCallback; // kept alive for the lifetime of the native request
         readonly DNS_SERVICE_RESOLVE_COMPLETE _resolveCallback; // kept alive for the lifetime of every resolve request
         readonly Action<DiscoverySignal> _onSignal;
         readonly string _interfaceId;
         readonly int _interfaceIndex;
         readonly int _ipv6ScopeId;
+        readonly Action? _beforeResolveCache;
         GCHandle _queryNameHandle;
         GCHandle _selfHandle;
 
@@ -275,12 +290,14 @@ public sealed class Win32DnsServiceDiscovery : IDnsServiceDiscovery
         bool _disposed;
         bool _selfRootingFreed;
 
-        public ServiceBrowse(string queryName, string interfaceId, int interfaceIndex, int ipv6ScopeId, Action<DiscoverySignal> onSignal)
+        public ServiceBrowse(IDnsServiceNativeApi native, string queryName, string interfaceId, int interfaceIndex, int ipv6ScopeId, Action<DiscoverySignal> onSignal, Action? beforeResolveCache)
         {
+            _native = native;
             _onSignal = onSignal;
             _interfaceId = interfaceId;
             _interfaceIndex = interfaceIndex;
             _ipv6ScopeId = ipv6ScopeId;
+            _beforeResolveCache = beforeResolveCache;
             _browseCallback = OnBrowseCallback;
             _resolveCallback = OnResolveComplete;
             _queryNameHandle = GCHandle.Alloc(queryName, GCHandleType.Pinned);
@@ -296,7 +313,7 @@ public sealed class Win32DnsServiceDiscovery : IDnsServiceDiscovery
             };
 
             _cancel = default;
-            var status = DnsServiceBrowse(ref _request, ref _cancel);
+            var status = _native.Browse(ref _request, ref _cancel);
             if (status != DnsQueryResultsFalse && status != DnsRequestPending)
             {
                 // Never queued — no callback is ever coming for it.
@@ -343,7 +360,7 @@ public sealed class Win32DnsServiceDiscovery : IDnsServiceDiscovery
                 // sets using DnsRecordListFree") — otherwise every single
                 // browse notification for the lifetime of the app leaks the
                 // native record list it carried.
-                DnsRecordListFree(dnsRecord, DnsFreeRecordList);
+                _native.FreeRecordList(dnsRecord);
 
                 // A disposed browse can still legitimately receive one more
                 // real notification (e.g. a goodbye that was already in
@@ -381,7 +398,7 @@ public sealed class Win32DnsServiceDiscovery : IDnsServiceDiscovery
                 {
                     try
                     {
-                        _pendingResolves[instanceName] = new PendingResolve(instanceName, ttl, _interfaceIndex, _resolveCallback);
+                        _pendingResolves[instanceName] = new PendingResolve(_native, instanceName, ttl, _interfaceIndex, _resolveCallback);
                     }
                     catch (Exception ex)
                     {
@@ -455,81 +472,78 @@ public sealed class Win32DnsServiceDiscovery : IDnsServiceDiscovery
         ///   more post-cancellation invocations still trickle in afterward.</summary>
         void OnResolveComplete(uint status, IntPtr contextPtr, IntPtr pInstance)
         {
-            PendingResolve pending;
-            try
+            var pending = TryGetPending(contextPtr);
+            if (pending is null)
             {
-                // The context handle's target IS the owning PendingResolve
-                // (rather than a separate small DTO) specifically so this
-                // line never depends on _pendingResolves still containing an
-                // entry for it — see PendingResolve's remarks. The try/catch
-                // is defense in depth against the one residual race
-                // DnsServiceResolveCancel's undocumented exact semantics
-                // can't fully rule out: a callback invocation arriving after
-                // FreeHandles() already ran for this exact contextPtr value.
-                // Two distinct failure shapes are possible if that happens:
-                // .Target itself throws (the handle slot is simply empty), or
-                // — much rarer — the slot was already reused by an unrelated
-                // GCHandle.Alloc elsewhere by the time this stale callback
-                // arrives, in which case .Target succeeds but the cast below
-                // fails. Both are "this callback is stale", not a crash.
-                pending = (PendingResolve)GCHandle.FromIntPtr(contextPtr).Target!;
-            }
-            catch (Exception ex) when (ex is InvalidOperationException or InvalidCastException)
-            {
-                // The handle behind contextPtr is no longer valid for this
-                // request — a stale callback for an already-finalized one.
-                // Nothing to free, nothing to report; drop it.
+                if (pInstance != IntPtr.Zero) _native.FreeInstance(pInstance);
                 return;
             }
 
-            var instanceName = pending.InstanceName;
-            bool wasDisposed;
-            lock (_gate) { wasDisposed = _disposed; }
-
-            if (pending.WasCancelled) pending.FreeHandles(); // this browse/instance no longer wants results — safe to reclaim now
-
+            if (pending.WasCancelled) pending.FreeHandles();
             CachedInstance? resolved = null;
             try
             {
-                if (status != DnsQueryResultsFalse || pInstance == IntPtr.Zero)
-                {
-                    if (status != DnsQueryResultsFalse && status != ErrorCancelled)
-                        DiagnosticLog.Current.Warning("discovery.resolve-status", $"status={status} instance={instanceName} interface={_interfaceId}");
-                    return;
-                }
-
-                try
-                {
-                    // The browse this resolve belongs to was torn down while
-                    // the resolve was still in flight — there's no one left
-                    // to notify. Still fall through to the finally below so
-                    // the native instance gets freed either way.
-                    if (wasDisposed || pending.WasCancelled) return;
-
-                    var cached = DnsRecordParser.ParseResolvedInstance(pInstance, _ipv6ScopeId);
-                    if (cached is null) return; // malformed/foreign instance on the same service type — never guess an identity
-
-                    lock (_gate)
-                    {
-                        if (_disposed || !_pendingResolves.ContainsKey(instanceName)) return; // withdrawn/torn down since we last checked
-                        _resolved[instanceName] = cached.Value;
-                    }
-                    resolved = cached;
-                }
-                finally
-                {
-                    // Ours to free per DNS_SERVICE_RESOLVE_COMPLETE's
-                    // documented contract regardless of whether we ended up
-                    // using it.
-                    DnsServiceFreeInstance(pInstance);
-                }
+                resolved = AcceptResolveResult(status, pInstance, pending);
             }
             catch (Exception ex)
             {
-                DiagnosticLog.Current.Error("discovery.resolve-callback-failed", $"instance={instanceName} interface={_interfaceId}", ex);
+                DiagnosticLog.Current.Error("discovery.resolve-callback-failed", $"instance={pending.InstanceName} interface={_interfaceId}", ex);
+            }
+            finally
+            {
+                if (pInstance != IntPtr.Zero) _native.FreeInstance(pInstance);
             }
 
             if (resolved is not null) EmitSeenSignals(resolved.Value, pending.Ttl);
+        }
+
+        static PendingResolve? TryGetPending(IntPtr contextPtr)
+        {
+            try
+            {
+                return GCHandle.FromIntPtr(contextPtr).Target as PendingResolve;
+            }
+            catch (InvalidOperationException)
+            {
+                return null;
+            }
+        }
+
+        CachedInstance? AcceptResolveResult(uint status, IntPtr pInstance, PendingResolve pending)
+        {
+            if (!IsSuccessfulResolve(status, pending.InstanceName)) return null;
+            if (pInstance == IntPtr.Zero || pending.WasCancelled) return null;
+            if (!StillWants(pending.InstanceName)) return null;
+
+            var parsed = DnsRecordParser.ParseResolvedInstance(pInstance, _ipv6ScopeId);
+            if (parsed is null) return null;
+            var cached = new CachedInstance(parsed.Value.PeerIdHint, parsed.Value.ProtocolVersion, parsed.Value.Spki,
+                parsed.Value.Ipv4, parsed.Value.Ipv6, parsed.Value.Port);
+            _beforeResolveCache?.Invoke();
+            return TryCache(pending.InstanceName, cached) ? cached : null;
+        }
+
+        bool IsSuccessfulResolve(uint status, string instanceName)
+        {
+            if (status == DnsQueryResultsFalse) return true;
+            if (status != ErrorCancelled)
+                DiagnosticLog.Current.Warning("discovery.resolve-status", $"status={status} instance={instanceName} interface={_interfaceId}");
+            return false;
+        }
+
+        bool StillWants(string instanceName)
+        {
+            lock (_gate) return !_disposed && _pendingResolves.ContainsKey(instanceName);
+        }
+
+        bool TryCache(string instanceName, CachedInstance cached)
+        {
+            lock (_gate)
+            {
+                if (_disposed || !_pendingResolves.ContainsKey(instanceName)) return false;
+                _resolved[instanceName] = cached;
+                return true;
+            }
         }
 
         /// <summary>Emits one Seen signal per address family the instance
@@ -588,7 +602,7 @@ public sealed class Win32DnsServiceDiscovery : IDnsServiceDiscovery
             // Outside _gate — same deadlock-avoidance reasoning as HandleGoodbye.
             foreach (var pending in pendingToCancel) pending.Dispose();
 
-            DnsServiceBrowseCancel(ref _cancel);
+            _native.CancelBrowse(ref _cancel);
             // Deliberately not freeing _queryNameHandle/_selfHandle here —
             // see the class remarks. OnBrowseCallback frees them, best
             // effort, on the first invocation it observes after _disposed
@@ -640,6 +654,7 @@ public sealed class Win32DnsServiceDiscovery : IDnsServiceDiscovery
     /// goodbyes/teardowns, and preferred over a use-after-free.</summary>
     sealed class PendingResolve
     {
+        readonly IDnsServiceNativeApi _native;
         public string InstanceName { get; }
         public uint Ttl { get; }
 
@@ -655,8 +670,9 @@ public sealed class Win32DnsServiceDiscovery : IDnsServiceDiscovery
         int _cancelIssued; // Interlocked-guarded 0/1
         int _handlesFreed; // Interlocked-guarded 0/1
 
-        public PendingResolve(string instanceName, uint ttl, int interfaceIndex, DNS_SERVICE_RESOLVE_COMPLETE callback)
+        public PendingResolve(IDnsServiceNativeApi native, string instanceName, uint ttl, int interfaceIndex, DNS_SERVICE_RESOLVE_COMPLETE callback)
         {
+            _native = native;
             InstanceName = instanceName;
             Ttl = ttl;
 
@@ -673,7 +689,7 @@ public sealed class Win32DnsServiceDiscovery : IDnsServiceDiscovery
             };
 
             _cancel = default;
-            var status = DnsServiceResolve(ref _request, ref _cancel);
+            var status = _native.Resolve(ref _request, ref _cancel);
             if (status != DnsQueryResultsFalse && status != DnsRequestPending)
             {
                 // The request was never actually queued, so no completion
@@ -690,7 +706,7 @@ public sealed class Win32DnsServiceDiscovery : IDnsServiceDiscovery
         public void Dispose()
         {
             if (Interlocked.Exchange(ref _cancelIssued, 1) != 0) return; // already requested
-            DnsServiceResolveCancel(ref _cancel);
+            _native.CancelResolve(ref _cancel);
         }
 
         /// <summary>Called exactly once, by ServiceBrowse.OnResolveComplete —
@@ -755,48 +771,34 @@ public sealed class Win32DnsServiceDiscovery : IDnsServiceDiscovery
         /// transport.md requires retaining scope for link-local IPv6 on a
         /// multi-homed PC, and an fe80:: address with ScopeId 0 is not
         /// actually connectable.</summary>
-        public static CachedInstance? ParseResolvedInstance(IntPtr pInstance, int interfaceIndex)
+        public static ResolvedService? ParseResolvedInstance(IntPtr pInstance, int interfaceIndex)
         {
             var instance = Marshal.PtrToStructure<DNS_SERVICE_INSTANCE>(pInstance);
 
-            IPAddress? ipv4 = null, ipv6 = null;
+            byte[]? ipv4 = null, ipv6 = null;
             if (instance.ip4Address != IntPtr.Zero)
             {
-                var bytes = new byte[4];
-                Marshal.Copy(instance.ip4Address, bytes, 0, 4);
-                ipv4 = new IPAddress(bytes);
+                ipv4 = new byte[4];
+                Marshal.Copy(instance.ip4Address, ipv4, 0, 4);
             }
             if (instance.ip6Address != IntPtr.Zero)
             {
-                var bytes = new byte[16];
-                Marshal.Copy(instance.ip6Address, bytes, 0, 16);
-                var candidate = new IPAddress(bytes);
-                ipv6 = candidate.IsIPv6LinkLocal ? new IPAddress(bytes, interfaceIndex) : candidate;
+                ipv6 = new byte[16];
+                Marshal.Copy(instance.ip6Address, ipv6, 0, 16);
             }
 
-            string? hintValue = null;
-            SpkiPin? spki = null;
-            var protocolVersion = 0;
+            var properties = new Dictionary<string, string?>();
             for (var i = 0; i < instance.dwPropertyCount; i++)
             {
                 var keyPtr = Marshal.ReadIntPtr(instance.keys, i * IntPtr.Size);
                 var valuePtr = Marshal.ReadIntPtr(instance.values, i * IntPtr.Size);
                 var key = keyPtr == IntPtr.Zero ? null : Marshal.PtrToStringUni(keyPtr);
                 var value = valuePtr == IntPtr.Zero ? null : Marshal.PtrToStringUni(valuePtr);
-                if (key is null) continue;
-
-                if (key == DiscoveryProtocol.TxtKeyPeerIdHint) hintValue = value;
-                else if (key == DiscoveryProtocol.TxtKeySpki && value is not null)
-                {
-                    try { spki = new SpkiPin(Convert.FromHexString(value)); }
-                    catch (Exception ex) when (ex is FormatException or ArgumentException) { return null; }
-                }
-                else if (key == DiscoveryProtocol.TxtKeyVersion && value is not null && int.TryParse(value, out var v)) protocolVersion = v;
+                if (key is not null) properties[key] = value;
             }
 
-            if (string.IsNullOrWhiteSpace(hintValue)) return null;
-
-            return new CachedInstance(new PeerIdHint(hintValue), protocolVersion, spki, ipv4, ipv6, instance.wPort);
+            return ResolvedServiceReducer.Reduce(
+                new ResolvedServiceData(properties, ipv4, ipv6, instance.wPort), interfaceIndex);
         }
     }
 
@@ -883,8 +885,32 @@ public sealed class Win32DnsServiceDiscovery : IDnsServiceDiscovery
 
     // ---- Native declarations (dnsapi.dll) ----
 
+    internal interface IDnsServiceNativeApi
+    {
+        uint Register(ref DNS_SERVICE_REGISTER_REQUEST request);
+        uint Deregister(ref DNS_SERVICE_REGISTER_REQUEST request);
+        uint Browse(ref DNS_SERVICE_BROWSE_REQUEST request, ref DNS_SERVICE_CANCEL cancel);
+        uint CancelBrowse(ref DNS_SERVICE_CANCEL cancel);
+        uint Resolve(ref DNS_SERVICE_RESOLVE_REQUEST request, ref DNS_SERVICE_CANCEL cancel);
+        uint CancelResolve(ref DNS_SERVICE_CANCEL cancel);
+        void FreeInstance(IntPtr instance);
+        void FreeRecordList(IntPtr records);
+    }
+
+    sealed class Win32DnsServiceNativeApi : IDnsServiceNativeApi
+    {
+        public uint Register(ref DNS_SERVICE_REGISTER_REQUEST request) => DnsServiceRegister(ref request, IntPtr.Zero);
+        public uint Deregister(ref DNS_SERVICE_REGISTER_REQUEST request) => DnsServiceDeRegister(ref request, IntPtr.Zero);
+        public uint Browse(ref DNS_SERVICE_BROWSE_REQUEST request, ref DNS_SERVICE_CANCEL cancel) => DnsServiceBrowse(ref request, ref cancel);
+        public uint CancelBrowse(ref DNS_SERVICE_CANCEL cancel) => DnsServiceBrowseCancel(ref cancel);
+        public uint Resolve(ref DNS_SERVICE_RESOLVE_REQUEST request, ref DNS_SERVICE_CANCEL cancel) => DnsServiceResolve(ref request, ref cancel);
+        public uint CancelResolve(ref DNS_SERVICE_CANCEL cancel) => DnsServiceResolveCancel(ref cancel);
+        public void FreeInstance(IntPtr instance) => DnsServiceFreeInstance(instance);
+        public void FreeRecordList(IntPtr records) => DnsRecordListFree(records, DnsFreeRecordList);
+    }
+
     [StructLayout(LayoutKind.Sequential, CharSet = CharSet.Unicode)]
-    struct DNS_SERVICE_INSTANCE
+    internal struct DNS_SERVICE_INSTANCE
     {
         public IntPtr pszInstanceName;
         public IntPtr pszHostName;
@@ -900,22 +926,22 @@ public sealed class Win32DnsServiceDiscovery : IDnsServiceDiscovery
     }
 
     [StructLayout(LayoutKind.Sequential)]
-    struct DNS_SERVICE_CANCEL
+    internal struct DNS_SERVICE_CANCEL
     {
         public IntPtr reserved;
     }
 
     [UnmanagedFunctionPointer(CallingConvention.Winapi)]
-    delegate void DNS_SERVICE_REGISTER_COMPLETE(uint status, IntPtr pQueryContext, IntPtr pInstance);
+    internal delegate void DNS_SERVICE_REGISTER_COMPLETE(uint status, IntPtr pQueryContext, IntPtr pInstance);
 
     [UnmanagedFunctionPointer(CallingConvention.Winapi)]
-    delegate void DNS_SERVICE_BROWSE_CALLBACK(uint status, IntPtr pQueryContext, IntPtr pDnsRecord);
+    internal delegate void DNS_SERVICE_BROWSE_CALLBACK(uint status, IntPtr pQueryContext, IntPtr pDnsRecord);
 
     [UnmanagedFunctionPointer(CallingConvention.Winapi)]
-    delegate void DNS_SERVICE_RESOLVE_COMPLETE(uint status, IntPtr pQueryContext, IntPtr pInstance);
+    internal delegate void DNS_SERVICE_RESOLVE_COMPLETE(uint status, IntPtr pQueryContext, IntPtr pInstance);
 
     [StructLayout(LayoutKind.Sequential)]
-    struct DNS_SERVICE_REGISTER_REQUEST
+    internal struct DNS_SERVICE_REGISTER_REQUEST
     {
         public uint Version;
         public uint InterfaceIndex;
@@ -927,7 +953,7 @@ public sealed class Win32DnsServiceDiscovery : IDnsServiceDiscovery
     }
 
     [StructLayout(LayoutKind.Sequential)]
-    struct DNS_SERVICE_BROWSE_REQUEST
+    internal struct DNS_SERVICE_BROWSE_REQUEST
     {
         public uint Version;
         public uint InterfaceIndex;
@@ -937,7 +963,7 @@ public sealed class Win32DnsServiceDiscovery : IDnsServiceDiscovery
     }
 
     [StructLayout(LayoutKind.Sequential)]
-    struct DNS_SERVICE_RESOLVE_REQUEST
+    internal struct DNS_SERVICE_RESOLVE_REQUEST
     {
         public uint Version;
         public uint InterfaceIndex;

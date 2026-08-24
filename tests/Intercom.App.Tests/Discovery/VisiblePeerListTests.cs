@@ -14,6 +14,7 @@ public class VisiblePeerListTests
         string interfaceId = "eth0",
         PeerIdHint? hint = null,
         int port = 5000,
+        int protocolVersion = 1,
         int ttlSeconds = 120,
         DateTimeOffset? at = null,
         string address = "192.168.1.20") => new()
@@ -21,7 +22,7 @@ public class VisiblePeerListTests
         PeerIdHint = hint ?? Hint(),
         InterfaceId = interfaceId,
         ObservedAt = at ?? Epoch,
-        ProtocolVersion = 1,
+        ProtocolVersion = protocolVersion,
         Ttl = TimeSpan.FromSeconds(ttlSeconds),
         Endpoint = new PeerEndpoint { Address = IPAddress.Parse(address), Port = port, InterfaceId = interfaceId },
     };
@@ -138,6 +139,21 @@ public class VisiblePeerListTests
     }
 
     [Fact]
+    public void EvaluateExpiry_AtExpiry_RemovesTheSightingAndRaisesChanged()
+    {
+        var list = new VisiblePeerList();
+        var changed = 0;
+        list.Changed += () => changed++;
+        list.Observe(SeenSignal(ttlSeconds: 30, at: Epoch), Epoch);
+
+        var removed = list.EvaluateExpiry(Epoch.AddSeconds(30));
+
+        Assert.Equal(1, removed);
+        Assert.Equal(2, changed);
+        Assert.Empty(list.Peers);
+    }
+
+    [Fact]
     public void EvaluateExpiry_OnlyOneOfTwoInterfacesExpired_KeepsPeerWithRemainingEndpoint()
     {
         var list = new VisiblePeerList();
@@ -163,6 +179,35 @@ public class VisiblePeerListTests
         Assert.Equal(1, removed);
         var peer = Assert.Single(list.Peers);
         Assert.Equal(Hint("peerB"), peer.PeerIdHint);
+    }
+
+    [Fact]
+    public void RemoveAllForInterface_WhenNothingMatches_DoesNotRaiseChanged()
+    {
+        var list = new VisiblePeerList();
+        var changed = 0;
+        list.Changed += () => changed++;
+        list.Observe(SeenSignal(), Epoch);
+
+        var removed = list.RemoveAllForInterface("missing");
+
+        Assert.Equal(0, removed);
+        Assert.Equal(1, changed);
+    }
+
+    [Fact]
+    public void PeerProjection_UsesNewestSightingAndFullTimeRange()
+    {
+        var list = new VisiblePeerList();
+        list.Observe(SeenSignal(interfaceId: "old", port: 4000, protocolVersion: 1, at: Epoch), Epoch);
+        list.Observe(SeenSignal(interfaceId: "new", port: 5000, protocolVersion: 2, at: Epoch.AddSeconds(20)), Epoch.AddSeconds(20));
+
+        var peer = Assert.Single(list.Peers);
+
+        Assert.Equal(2, peer.ProtocolVersion);
+        Assert.Contains(peer.Endpoints, endpoint => endpoint.InterfaceId == "new" && endpoint.Port == 5000);
+        Assert.Equal(Epoch, peer.FirstSeenAt);
+        Assert.Equal(Epoch.AddSeconds(20), peer.LastSeenAt);
     }
 
     [Fact]
@@ -219,5 +264,30 @@ public class VisiblePeerListTests
         var peer = Assert.Single(list.Peers);
         var endpoint = Assert.Single(peer.Endpoints);
         Assert.Equal("eth0", endpoint.InterfaceId);
+    }
+
+    [Fact]
+    public void Observe_Seen_WithMatchingInterface_KeepsTheOriginalEndpointInstance()
+    {
+        var list = new VisiblePeerList();
+        var endpoint = new PeerEndpoint
+        {
+            Address = IPAddress.Parse("192.168.1.20"),
+            Port = 5000,
+            InterfaceId = "eth0",
+        };
+        var signal = new DiscoverySignal.Seen
+        {
+            PeerIdHint = Hint(),
+            InterfaceId = "eth0",
+            ObservedAt = Epoch,
+            ProtocolVersion = 1,
+            Ttl = TimeSpan.FromSeconds(120),
+            Endpoint = endpoint,
+        };
+
+        list.Observe(signal, Epoch);
+
+        Assert.Same(endpoint, Assert.Single(Assert.Single(list.Peers).Endpoints));
     }
 }

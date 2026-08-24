@@ -60,16 +60,31 @@ public sealed class GroupFloorService : IDisposable
         try
         {
             var command = GroupFloorFrameCodec.Decode(frame);
-            if (command.ActorPeerId != senderPeerId) throw new InvalidOperationException("Group-floor actor does not match its authenticated sender.");
-            Session.Apply(command);
-            if (command.Kind == GroupFloorCommandKind.Join && _localPeerId.CompareTo(command.SubjectPeerId) < 0)
-                _ = _audio.PrepareAsync(command.SubjectPeerId, CancellationToken.None);
-            StateChanged?.Invoke();
+            ApplyReceived(senderPeerId, command);
         }
         catch (Exception ex) when (ex is MalformedFrameException or InvalidOperationException)
         {
             CommandRejected?.Invoke(ex);
         }
+    }
+
+    void ApplyReceived(Guid senderPeerId, GroupFloorCommand command)
+    {
+        if (command.ActorPeerId != senderPeerId) throw new InvalidOperationException("Group-floor actor does not match its authenticated sender.");
+        Session.Apply(command);
+        PrepareJoinedPeer(command);
+        StateChanged?.Invoke();
+    }
+
+    void PrepareJoinedPeer(GroupFloorCommand command)
+    {
+        if (command.Kind != GroupFloorCommandKind.Join) return;
+        PrepareIfCoordinator(command.SubjectPeerId);
+    }
+
+    void PrepareIfCoordinator(Guid peerId)
+    {
+        if (_localPeerId.CompareTo(peerId) < 0) _ = _audio.PrepareAsync(peerId, CancellationToken.None);
     }
 
     public void Dispose() => _transport.FrameReceived -= OnFrameReceived;

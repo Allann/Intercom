@@ -112,48 +112,45 @@ public sealed class DiscoveryService : IDisposable
                     ? "No eligible multicast-capable LAN interfaces."
                     : string.Join("; ", eligible.Select(i => $"{i.Name} ipv4Index={i.Ipv4InterfaceIndex} ipv6Index={i.Ipv6InterfaceIndex} addresses={string.Join(',', i.UnicastAddresses)}")));
             var eligibleById = eligible.ToDictionary(i => i.Id);
+            RemoveMissingInterfaces(eligibleById);
+            RemoveChangedInterfaces(eligibleById);
+            AddNewInterfaces(eligible);
+        }
+    }
 
-            // Torn down first: an interface that dropped out shouldn't keep a
-            // stale registration alive even briefly while we set up new ones.
-            foreach (var staleId in _active.Keys.Where(id => !eligibleById.ContainsKey(id)).ToList())
-            {
-                TearDownLocked(staleId);
-            }
+    void RemoveMissingInterfaces(IReadOnlyDictionary<string, LanInterface> eligibleById)
+    {
+        foreach (var id in _active.Keys.Where(id => !eligibleById.ContainsKey(id)).ToList()) TearDownLocked(id);
+    }
 
-            // An interface that's still eligible but whose bound addresses
-            // changed (DHCP renewal, new IPv6 address, adapter re-index after
-            // sleep/resume) is stale too: the old registration/browse were
-            // bound to addresses that may no longer be valid, and other
-            // peers need the refreshed record. Re-created below alongside
-            // genuinely new interfaces.
-            foreach (var (id, reg) in _active.ToList())
-            {
-                if (eligibleById.TryGetValue(id, out var current) && !HasSameAddresses(reg.Interface, current))
-                {
-                    TearDownLocked(id);
-                }
-            }
+    void RemoveChangedInterfaces(IReadOnlyDictionary<string, LanInterface> eligibleById)
+    {
+        foreach (var (id, registration) in _active.ToList())
+            if (eligibleById.TryGetValue(id, out var current) && !HasSameAddresses(registration.Interface, current)) TearDownLocked(id);
+    }
 
-            foreach (var iface in eligible)
-            {
-                if (_active.ContainsKey(iface.Id)) continue; // already registered/browsing with current addresses
+    void AddNewInterfaces(IEnumerable<LanInterface> eligible)
+    {
+        foreach (var iface in eligible)
+        {
+            if (_active.ContainsKey(iface.Id)) continue;
+            AddInterface(iface);
+        }
+    }
 
-                IDisposable registration;
-                IDisposable browse;
-                try
-                {
-                    registration = _dns.Register(iface, _advertisement);
-                    browse = _dns.Browse(iface, ObserveSignal);
-                }
-                catch (Exception ex)
-                {
-                    DiagnosticLog.Current.Error("discovery.interface-failed", $"interface={iface.Name} id={iface.Id}", ex);
-                    throw;
-                }
-
-                _active[iface.Id] = new InterfaceRegistration(iface, registration, browse);
-                DiagnosticLog.Current.Info("discovery.interface-active", $"interface={iface.Name} id={iface.Id}");
-            }
+    void AddInterface(LanInterface iface)
+    {
+        try
+        {
+            var registration = _dns.Register(iface, _advertisement);
+            var browse = _dns.Browse(iface, ObserveSignal);
+            _active[iface.Id] = new InterfaceRegistration(iface, registration, browse);
+            DiagnosticLog.Current.Info("discovery.interface-active", $"interface={iface.Name} id={iface.Id}");
+        }
+        catch (Exception ex)
+        {
+            DiagnosticLog.Current.Error("discovery.interface-failed", $"interface={iface.Name} id={iface.Id}", ex);
+            throw;
         }
     }
 

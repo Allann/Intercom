@@ -80,9 +80,25 @@ public sealed class AdaptiveJitterBuffer
         if (_recentConcealment.Count > AdaptWindowFrames) _recentConcealment.Dequeue();
         if (_recentConcealment.Count < AdaptWindowFrames) return;
         var concealedCount = _recentConcealment.Count(value => value);
-        if (concealedCount > AdaptWindowFrames / 10 && TargetFrames < MaxTargetFrames) TargetFrames++;
-        else if (concealedCount == 0 && TargetFrames > MinTargetFrames) TargetFrames--;
+        AdaptUp(concealedCount);
+        AdaptDown(concealedCount);
     }
+
+    void AdaptUp(int concealedCount)
+    {
+        if (concealedCount <= AdaptWindowFrames / 10) return;
+        IncreaseTarget();
+    }
+
+    void IncreaseTarget() { if (TargetFrames < MaxTargetFrames) TargetFrames++; }
+
+    void AdaptDown(int concealedCount)
+    {
+        if (concealedCount != 0) return;
+        DecreaseTarget();
+    }
+
+    void DecreaseTarget() { if (TargetFrames > MinTargetFrames) TargetFrames--; }
 
     /// <summary>Stops the current sequence clock at an explicit sender
     /// boundary. Buffered frames are retained because the next talkspurt may

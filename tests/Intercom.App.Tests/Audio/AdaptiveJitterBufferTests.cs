@@ -68,4 +68,74 @@ public sealed class AdaptiveJitterBufferTests
         buffer.Add(Frame(5));
         Assert.Equal((ulong)3, buffer.Read().Frame!.Sequence);
     }
+
+    [Fact]
+    public void FiftyCleanReads_ReducesTargetOnlyToMinimum()
+    {
+        var buffer = new AdaptiveJitterBuffer();
+        for (ulong sequence = 0; sequence < 60; sequence++)
+        {
+            buffer.Add(Frame(sequence));
+            if (sequence >= 2) Assert.False(buffer.Read().Conceal);
+        }
+
+        Assert.Equal(AdaptiveJitterBuffer.MinTargetFrames, buffer.TargetFrames);
+    }
+
+    [Fact]
+    public void MoreThanFiveConcealedReads_IncreasesTarget()
+    {
+        var buffer = new AdaptiveJitterBuffer();
+        for (ulong sequence = 0; sequence < 60; sequence++)
+        {
+            if (sequence % 8 != 7) buffer.Add(Frame(sequence));
+            if (sequence >= 2) buffer.Read();
+        }
+
+        Assert.Equal(AdaptiveJitterBuffer.MaxTargetFrames, buffer.TargetFrames);
+    }
+
+    [Fact]
+    public void ExactlyFiveConcealedReadsInWindow_DoesNotIncreaseTarget()
+    {
+        var buffer = new AdaptiveJitterBuffer();
+        buffer.Add(Frame(0));
+        buffer.Add(Frame(1));
+        buffer.Add(Frame(2));
+
+        for (ulong sequence = 0; sequence < 50; sequence++)
+        {
+            if (sequence >= 3 && sequence % 10 != 9) buffer.Add(Frame(sequence));
+            buffer.Read();
+        }
+
+        Assert.Equal(5, buffer.ConcealedFrames);
+        Assert.Equal(AdaptiveJitterBuffer.InitialTargetFrames, buffer.TargetFrames);
+    }
+
+    [Fact]
+    public void Add_RejectsDuplicateAndLateFrames()
+    {
+        var buffer = new AdaptiveJitterBuffer();
+        Assert.True(buffer.Add(Frame(0)));
+        Assert.False(buffer.Add(Frame(0)));
+        buffer.Add(Frame(1));
+        buffer.Add(Frame(2));
+        Assert.Equal((ulong)0, buffer.Read().Frame!.Sequence);
+        Assert.False(buffer.Add(Frame(0)));
+    }
+
+    [Fact]
+    public void Reset_ClearsFramesCountersAndAdaptationState()
+    {
+        var buffer = new AdaptiveJitterBuffer();
+        for (ulong sequence = 0; sequence < 20; sequence++) buffer.Add(Frame(sequence));
+        buffer.Read();
+
+        buffer.Reset();
+
+        Assert.Equal(0, buffer.Occupancy);
+        Assert.Equal(AdaptiveJitterBuffer.InitialTargetFrames, buffer.TargetFrames);
+        Assert.False(buffer.Read().Conceal);
+    }
 }

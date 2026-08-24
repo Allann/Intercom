@@ -55,4 +55,52 @@ public sealed class ChatMarkdownTests
 
         Assert.Equal("See family.example now", document.SpeechText);
     }
+
+    [Fact]
+    public void Parse_RecognisesEveryInlineAndListVariant()
+    {
+        var document = ChatMarkdown.Parse("* bullet\n**bold** ~~strike~~ `code` *italic*");
+
+        Assert.StartsWith("• bullet\n", document.PlainText);
+        Assert.Contains(document.Inlines, value => value is ChatTextRun { Text: "bold", Bold: true });
+        Assert.Contains(document.Inlines, value => value is ChatTextRun { Text: "strike", Strikethrough: true });
+        Assert.Contains(document.Inlines, value => value is ChatTextRun { Text: "code", Code: true });
+        Assert.Contains(document.Inlines, value => value is ChatTextRun { Text: "italic", Italic: true });
+        Assert.DoesNotContain(document.Inlines, value => value.Text.Length == 0);
+        Assert.Equal("bullet bold strike code italic", document.SpeechText);
+    }
+
+    [Fact]
+    public void Parse_EmptySource_ReturnsEmptyDocument()
+    {
+        var document = ChatMarkdown.Parse(string.Empty);
+
+        Assert.Empty(document.Inlines);
+        Assert.Empty(document.PlainText);
+        Assert.Empty(document.SpeechText);
+    }
+
+    [Fact]
+    public void Parse_AllChangedBranches_PreserveExactPlainAndSpeechText()
+    {
+        const string source = "> quote\r\n![alt](https://images.example/a.png) [label](https://safe.example/a) https://shared.example/a **bold**\n```\ncode\n```";
+
+        var document = ChatMarkdown.Parse(source);
+
+        Assert.Equal("│ quote\n![alt](https://images.example/a.png) label https://shared.example/a bold\ncode", document.PlainText);
+        Assert.Equal("quote ![alt](https://images.example/a.png) label shared.example bold code", document.SpeechText);
+        Assert.Collection(document.Inlines,
+            run => Assert.Equal("│ ", Assert.IsType<ChatTextRun>(run).Text),
+            run => Assert.Equal("quote", Assert.IsType<ChatTextRun>(run).Text),
+            run => Assert.Equal("\n", Assert.IsType<ChatTextRun>(run).Text),
+            run => Assert.Equal("![alt](https://images.example/a.png)", Assert.IsType<ChatTextRun>(run).Text),
+            run => Assert.Equal(" ", Assert.IsType<ChatTextRun>(run).Text),
+            run => Assert.True(Assert.IsType<ChatLinkRun>(run).RequiresConfirmation),
+            run => Assert.Equal(" ", Assert.IsType<ChatTextRun>(run).Text),
+            run => Assert.False(Assert.IsType<ChatLinkRun>(run).RequiresConfirmation),
+            run => Assert.Equal(" ", Assert.IsType<ChatTextRun>(run).Text),
+            run => Assert.True(Assert.IsType<ChatTextRun>(run).Bold),
+            run => Assert.Equal("\n", Assert.IsType<ChatTextRun>(run).Text),
+            run => Assert.True(Assert.IsType<ChatTextRun>(run).Code));
+    }
 }

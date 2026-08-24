@@ -35,23 +35,37 @@ public sealed class GroupFloorSession
         if (command.SessionId != SessionId) throw new InvalidOperationException("Command belongs to another group session.");
         if (Ended) return;
 
+        if (ApplyMembership(command)) return;
+        ApplyFloor(command);
+    }
+
+    bool ApplyMembership(GroupFloorCommand command)
+    {
         switch (command.Kind)
         {
             case GroupFloorCommandKind.Join:
                 RequirePeer(command.SubjectPeerId);
                 _participants.Add(command.SubjectPeerId);
-                break;
+                return true;
             case GroupFloorCommandKind.Leave:
                 Leave(command.SubjectPeerId);
-                break;
+                return true;
             case GroupFloorCommandKind.RaiseHand:
                 RequireActive(command.SubjectPeerId);
                 if (SpeakerPeerId != command.SubjectPeerId && !_queue.Contains(command.SubjectPeerId))
                     _queue.Add(command.SubjectPeerId);
-                break;
+                return true;
             case GroupFloorCommandKind.LowerHand:
                 _queue.Remove(command.SubjectPeerId);
-                break;
+                return true;
+            default: return false;
+        }
+    }
+
+    void ApplyFloor(GroupFloorCommand command)
+    {
+        switch (command.Kind)
+        {
             case GroupFloorCommandKind.GrantFloor:
                 RequireCoordinator(command.ActorPeerId);
                 RequireActive(command.SubjectPeerId);

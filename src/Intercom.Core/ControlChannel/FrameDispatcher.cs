@@ -47,22 +47,8 @@ public sealed class FrameDispatcher
     /// sends a frame this dispatcher will reject.</summary>
     public bool Dispatch(ControlFrame frame)
     {
-        if (!_helloReceived)
-        {
-            if (frame.Type != ControlMessageType.Hello) return false;
-            _helloReceived = true;
-        }
-        else if (frame.Type == ControlMessageType.Hello)
-        {
-            // Hello is one-time; a second Hello on the same connection is a
-            // protocol violation, not a re-negotiation.
-            return false;
-        }
-
-        if (_trust is ConnectionTrust.PairingOnly && !IsPairingPermitted(frame.Type))
-        {
-            return false;
-        }
+        if (!AcceptHelloOrder(frame.Type)) return false;
+        if (!AcceptTrust(frame.Type)) return false;
 
         FrameAccepted?.Invoke(frame);
 
@@ -70,18 +56,32 @@ public sealed class FrameDispatcher
         // something to deliver-acknowledge: a Delivered-for-Delivered would
         // just be self-referential noise, and Hello's own "delivery" is
         // signaled by the connection becoming usable at all.
-        if (frame.Type is not (ControlMessageType.Hello or ControlMessageType.Delivered))
-        {
-            DeliveredReceiptReady?.Invoke(new ControlFrame
-            {
-                Type = ControlMessageType.Delivered,
-                MessageId = Guid.NewGuid(),
-                CorrelationId = frame.MessageId,
-                Payload = [],
-            });
-        }
+        EmitReceipt(frame);
 
         return true;
+    }
+
+    bool AcceptHelloOrder(ControlMessageType type)
+    {
+        if (_helloReceived) return type != ControlMessageType.Hello;
+        if (type != ControlMessageType.Hello) return false;
+        _helloReceived = true;
+        return true;
+    }
+
+    bool AcceptTrust(ControlMessageType type) =>
+        _trust is not ConnectionTrust.PairingOnly || IsPairingPermitted(type);
+
+    void EmitReceipt(ControlFrame frame)
+    {
+        if (frame.Type is ControlMessageType.Hello or ControlMessageType.Delivered) return;
+        DeliveredReceiptReady?.Invoke(new ControlFrame
+        {
+            Type = ControlMessageType.Delivered,
+            MessageId = Guid.NewGuid(),
+            CorrelationId = frame.MessageId,
+            Payload = [],
+        });
     }
 
     static bool IsPairingPermitted(ControlMessageType type) => type is ControlMessageType.Hello

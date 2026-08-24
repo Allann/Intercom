@@ -39,6 +39,7 @@ public sealed class IdentityStore
     readonly string _pendingPairingPath;
     readonly ApprovedPeerRegistry _registry = new();
     readonly PendingPairingRegistry _pendingPairings = new();
+    readonly Func<DateTimeOffset> _clock;
 
     // Issue #22 introduced the first callers that can legitimately mutate
     // this store from more than one thread at once: a pairing ceremony's
@@ -80,8 +81,13 @@ public sealed class IdentityStore
     /// <summary>Same distinction as RegistryWasReset, for pending pairing state.</summary>
     public bool PendingPairingsWereReset { get; private set; }
 
-    public IdentityStore(string? appDataDirectory = null)
+    public IdentityStore(string? appDataDirectory = null) : this(appDataDirectory, () => DateTimeOffset.UtcNow)
     {
+    }
+
+    internal IdentityStore(string? appDataDirectory, Func<DateTimeOffset> clock)
+    {
+        _clock = clock;
         var dir = appDataDirectory ?? Path.Combine(
             Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "Intercom");
         Directory.CreateDirectory(dir);
@@ -108,90 +114,59 @@ public sealed class IdentityStore
         var identity = TryLoadIdentity();
         if (identity is null)
         {
-            // Identity loss is what triggers recovery (re-pairing warning),
-            // not merely "identity.dat happened to be missing". If the
-            // registry or pending-pairing files survived while identity.dat
-            // was lost, that's still identity loss — those files get wiped
-            // below the same as any other regeneration, and callers must be
-            // told so they don't mistake it for a fresh install.
-            IdentityWasRegenerated = identityExistedBefore || registryExistedBefore || pendingExistedBefore;
-
-            // Old approvals/pending requests are meaningless against a new
-            // identity. Clear the in-memory collections, not just the disk
-            // files — LoadOrCreate is not guaranteed to only ever run once
-            // against a fresh instance, and leaving stale in-memory state
-            // behind would silently carry it into the new identity.
-            _registry.ReplaceAll([]);
-            _pendingPairings.ReplaceAll([]);
-            DeleteIfExists(_registryPath);
-            DeleteIfExists(_pendingPairingPath);
-
-            identity = LocalIdentity.CreateNew();
-            PersistIdentity(identity);
-            PersistRegistry(_registry.Peers); // establish an empty registry file now, not lazily on first mutation
+            identity = RecoverMissingIdentity(identityExistedBefore, registryExistedBefore, pendingExistedBefore);
         }
 
         Identity = identity;
 
-        if (!IdentityWasRegenerated)
+        if (!IdentityWasRegenerated) LoadPersistedState(registryExistedBefore, pendingExistedBefore);
+    }
+
+    LocalIdentity RecoverMissingIdentity(bool identityExisted, bool registryExisted, bool pendingExisted)
+    {
+        IdentityWasRegenerated = identityExisted || registryExisted || pendingExisted;
+        _registry.ReplaceAll([]);
+        _pendingPairings.ReplaceAll([]);
+        DeleteIfExists(_registryPath);
+        DeleteIfExists(_pendingPairingPath);
+        var identity = LocalIdentity.CreateNew();
+        PersistIdentity(identity);
+        PersistRegistry(_registry.Peers);
+        return identity;
+    }
+
+    void LoadPersistedState(bool registryExisted, bool pendingExisted)
+    {
+        LoadRegistry(registryExisted);
+        var rejectedFutureCount = LoadPendingPairings(pendingExisted);
+        var prunedCount = _pendingPairings.RemoveExpired(_clock());
+        if (prunedCount > 0 || rejectedFutureCount > 0 || PendingPairingsWereReset)
+            PersistPendingPairings(_pendingPairings.Pending);
+    }
+
+    void LoadRegistry(bool existed)
+    {
+        var peers = TryLoadRegistry();
+        if (peers is not null) { _registry.ReplaceAll(peers); return; }
+        if (!existed) return;
+        RegistryWasReset = true;
+        _registry.ReplaceAll([]);
+        PersistRegistry(_registry.Peers);
+    }
+
+    int LoadPendingPairings(bool existed)
+    {
+        var pending = TryLoadPendingPairings();
+        if (pending is null)
         {
-            // Only evaluate the registry/pending state independently when the
-            // identity itself loaded fine — if the identity was just
-            // regenerated, both were deliberately wiped above, not corrupted.
-            var peers = TryLoadRegistry();
-            if (peers is not null)
-            {
-                _registry.ReplaceAll(peers);
-            }
-            else if (registryExistedBefore)
-            {
-                RegistryWasReset = true;
-                // Fail closed: clear whatever this instance had in memory
-                // (e.g. from an earlier successful call) before persisting the
-                // replacement — otherwise stale in-memory approvals would be
-                // written back to disk as if they were the reset state.
-                _registry.ReplaceAll([]);
-                // Replace the corrupt file immediately rather than leaving it
-                // to fail the same way on every future launch.
-                PersistRegistry(_registry.Peers);
-            }
-
-            var pending = TryLoadPendingPairings();
-            var rejectedFutureCount = 0;
-            if (pending is not null)
-            {
-                // A future-dated StartedAt is malformed input (clock rollback,
-                // manual tampering, corruption that survived deserialization):
-                // if accepted, ADR-0002's 2-minute expiry would only start
-                // counting down from that future instant, letting the request
-                // block pairing for far longer than the rule allows. Fail
-                // closed by dropping it on load rather than trusting it.
-                var now = DateTimeOffset.UtcNow;
-                var valid = new List<PendingPairing>(pending.Count);
-                foreach (var p in pending)
-                {
-                    if (p.StartedAt > now) { rejectedFutureCount++; continue; }
-                    valid.Add(p);
-                }
-                _pendingPairings.ReplaceAll(valid);
-            }
-            else if (pendingExistedBefore)
-            {
-                PendingPairingsWereReset = true;
-                _pendingPairings.ReplaceAll([]); // same fail-closed reasoning as the registry above
-            }
-
-            // Prune expired requests on every load (ADR-0002: 2-minute expiry
-            // with no trust-state change) so a stale request from a previous
-            // session never lingers or blocks that peer indefinitely. Persist
-            // afterward whenever something changed, so a corrupt file gets
-            // replaced and pruned/rejected entries don't reappear next launch.
-            var prunedCount = _pendingPairings.RemoveExpired(DateTimeOffset.UtcNow);
-            if (prunedCount > 0 || rejectedFutureCount > 0 || PendingPairingsWereReset)
-            {
-                PersistPendingPairings(_pendingPairings.Pending);
-            }
+            if (existed) { PendingPairingsWereReset = true; _pendingPairings.ReplaceAll([]); }
+            return 0;
         }
+
+        var now = _clock();
+        var valid = pending.Where(pairing => pairing.StartedAt <= now).ToList();
+        _pendingPairings.ReplaceAll(valid);
+        return pending.Count - valid.Count;
     }
 
     /// <summary>Fail-closed lookup: never returns a revoked peer as approved.</summary>
@@ -312,10 +287,7 @@ public sealed class IdentityStore
 
             var dto = JsonSerializer.Deserialize<LocalIdentityDto>(plainBytes)
                 ?? throw new InvalidDataException("Empty identity payload.");
-            var certificate = X509CertificateLoader.LoadPkcs12(
-                dto.Pfx,
-                password: null,
-                X509KeyStorageFlags.UserKeySet | X509KeyStorageFlags.Exportable);
+            var certificate = LocalIdentity.LoadPkcs12(dto.Pfx);
 
             // Expiry is handled identically to corruption/loss (ADR-0002): a
             // new identity, requiring re-pairing everywhere. NotAfter is local

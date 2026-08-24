@@ -143,21 +143,8 @@ public sealed class RichChatService
 
     void OnFrameReceived(ControlFrame frame)
     {
-        if (frame.Type == ControlMessageType.ChatTyping)
-        {
-            if (frame.Payload.Length != 1) return;
-            var wasTyping = IsPeerTyping;
-            _peerTypingExpiresAt = frame.Payload[0] == 1 ? _clock() + TypingLifetime : null;
-            var isTyping = IsPeerTyping;
-            if (wasTyping != isTyping) PeerTypingChanged?.Invoke(isTyping);
-            return;
-        }
-        if (frame.Type == ControlMessageType.ChatImageStart) { ReceiveImageStart(frame); return; }
-        if (frame.Type == ControlMessageType.ChatImageChunk) { ReceiveImageChunk(frame); return; }
-        if (frame.Type == ControlMessageType.ChatImageComplete) { _ = CompleteIncomingImageAsync(frame); return; }
-        if (frame.Type == ControlMessageType.ChatImageReceived) { ReceiveImageAccepted(frame); return; }
-        if (frame.Type == ControlMessageType.ChatImageCancelled) { ReceiveImageCancelled(frame); return; }
-        if (frame.Type == ControlMessageType.ChatImageFailed) { ReceiveImageFailed(frame); return; }
+        if (frame.Type == ControlMessageType.ChatTyping) { ReceiveTyping(frame); return; }
+        if (ReceiveImageFrame(frame)) return;
         if (frame.Type != ControlMessageType.Chat) return;
         try
         {
@@ -165,6 +152,29 @@ public sealed class RichChatService
             MessageReceived?.Invoke(message);
         }
         catch (MalformedFrameException) { }
+    }
+
+    void ReceiveTyping(ControlFrame frame)
+    {
+        if (frame.Payload.Length != 1) return;
+        var wasTyping = IsPeerTyping;
+        _peerTypingExpiresAt = frame.Payload[0] == 1 ? _clock() + TypingLifetime : null;
+        var isTyping = IsPeerTyping;
+        if (wasTyping != isTyping) PeerTypingChanged?.Invoke(isTyping);
+    }
+
+    bool ReceiveImageFrame(ControlFrame frame)
+    {
+        switch (frame.Type)
+        {
+            case ControlMessageType.ChatImageStart: ReceiveImageStart(frame); return true;
+            case ControlMessageType.ChatImageChunk: ReceiveImageChunk(frame); return true;
+            case ControlMessageType.ChatImageComplete: _ = CompleteIncomingImageAsync(frame); return true;
+            case ControlMessageType.ChatImageReceived: ReceiveImageAccepted(frame); return true;
+            case ControlMessageType.ChatImageCancelled: ReceiveImageCancelled(frame); return true;
+            case ControlMessageType.ChatImageFailed: ReceiveImageFailed(frame); return true;
+            default: return false;
+        }
     }
 
     void OnDeliveryConfirmed(Guid messageId)
@@ -273,8 +283,19 @@ public sealed class RichChatService
     void OnConnectionDropped()
     {
         Conversation.MarkAllPendingUndelivered();
+        MarkPendingImagesFailed();
+        ClearImageTransfers();
+        ClearPeerTyping();
+    }
+
+    void MarkPendingImagesFailed()
+    {
         foreach (var message in Conversation.Messages.Where(item => item.ContentKind == ChatContentKind.Image && item.DeliveryState == ChatDeliveryState.Undelivered))
             Conversation.UpdateImage(message.MessageId, null, ChatTransferState.Failed, message.TransferProgress, ChatDeliveryState.Undelivered);
+    }
+
+    void ClearImageTransfers()
+    {
         lock (_imageGate)
         {
             foreach (var incoming in _incomingImages.Values) incoming.Buffer.Dispose();
@@ -282,10 +303,16 @@ public sealed class RichChatService
             _outgoingImageId = null;
             _cancelledOutgoingImages.Clear();
         }
+    }
+
+    void ClearPeerTyping()
+    {
         if (_peerTypingExpiresAt is null) return;
         _peerTypingExpiresAt = null;
-        PeerTypingChanged?.Invoke(false);
+        RaisePeerTypingStopped();
     }
+
+    void RaisePeerTypingStopped() => PeerTypingChanged?.Invoke(false);
 
     sealed record IncomingImage(ChatImageStart Start, MemoryStream Buffer);
 }

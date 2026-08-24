@@ -13,6 +13,15 @@ public enum AudioMeasurementProfile
 
 public static class AudioMeasurementProfileParser
 {
+    static readonly IReadOnlyDictionary<AudioMeasurementProfile, string> ConfigValues =
+        new Dictionary<AudioMeasurementProfile, string>
+        {
+            [AudioMeasurementProfile.Loss1Percent] = "loss1",
+            [AudioMeasurementProfile.Loss5Percent] = "loss5",
+            [AudioMeasurementProfile.Burst] = "burst",
+            [AudioMeasurementProfile.Clean] = "clean",
+            [AudioMeasurementProfile.Disabled] = "disabled",
+        };
     public static AudioMeasurementProfile Parse(string? value) => value?.Trim().ToLowerInvariant() switch
     {
         "clean" => AudioMeasurementProfile.Clean,
@@ -22,14 +31,8 @@ public static class AudioMeasurementProfileParser
         _ => AudioMeasurementProfile.Disabled,
     };
 
-    public static string ToConfigValue(this AudioMeasurementProfile profile) => profile switch
-    {
-        AudioMeasurementProfile.Loss1Percent => "loss1",
-        AudioMeasurementProfile.Loss5Percent => "loss5",
-        AudioMeasurementProfile.Burst => "burst",
-        AudioMeasurementProfile.Clean => "clean",
-        _ => "disabled",
-    };
+    public static string ToConfigValue(this AudioMeasurementProfile profile) =>
+        ConfigValues.GetValueOrDefault(profile, "disabled");
 }
 
 /// <summary>Deterministic outbound loss used only by the two-PC measurement

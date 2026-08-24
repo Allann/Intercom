@@ -55,19 +55,25 @@ public readonly record struct AppVersion(int Major, int Minor, int Build, int Re
     {
         version = Zero;
         if (string.IsNullOrWhiteSpace(tag)) return false;
-
-        var s = tag.Trim();
-        if (s.Length > 0 && (s[0] == 'v' || s[0] == 'V')) s = s[1..];
-
-        var match = Pattern.Match(s);
+        var match = Pattern.Match(NormalizeTag(tag));
         if (!match.Success || !match.Groups[1].Success) return false;
+        return TryParseMatch(match, out version);
+    }
 
-        if (!TryPart(match, 1, out var major)) return false;
-        if (!TryPart(match, 2, out var minor)) return false;
-        if (!TryPart(match, 3, out var build)) return false;
-        if (!TryPart(match, 4, out var revision)) return false;
+    static string NormalizeTag(string tag)
+    {
+        var value = tag.Trim();
+        if (value.StartsWith('v') || value.StartsWith('V')) return value[1..];
+        return value;
+    }
 
-        version = new AppVersion(major, minor, build, revision);
+    static bool TryParseMatch(Match match, out AppVersion version)
+    {
+        version = Zero;
+        var parts = new int[4];
+        for (var index = 0; index < parts.Length; index++)
+            if (!TryPart(match, index + 1, out parts[index])) return false;
+        version = new AppVersion(parts[0], parts[1], parts[2], parts[3]);
         return true;
     }
 

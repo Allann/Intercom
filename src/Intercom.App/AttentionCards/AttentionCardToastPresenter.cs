@@ -136,8 +136,17 @@ public sealed class AttentionCardToastPresenter : IDisposable
     /// <see cref="AttentionCard.Icon"/> as a plain text glyph, so the toast
     /// does the same, just rasterized (toast logos are images, not text) via
     /// <see cref="RenderIconAsync"/>.</para></summary>
-    public Task ShowAsync(AttentionCard card, string fromLabel)
+    public Task<AttentionCardNotificationSubmission> ShowAsync(AttentionCard card, string fromLabel)
     {
+        var submission = AttentionCardNotificationSubmission.From(MapSetting(AppNotificationManager.Default.Setting));
+        if (submission.Status == AttentionCardNotificationSubmissionStatus.Blocked)
+        {
+            DiagnosticLog.Current.Info(
+                "notifications.show-blocked",
+                $"card={card.MessageId} setting={submission.Setting}");
+            return Task.FromResult(submission);
+        }
+
         var cardId = card.MessageId.ToString();
 
         var builder = new AppNotificationBuilder()
@@ -158,9 +167,22 @@ public sealed class AttentionCardToastPresenter : IDisposable
 
         DiagnosticLog.Current.Info("notifications.show-requested", $"card={card.MessageId}");
         AppNotificationManager.Default.Show(builder.BuildNotification());
-        DiagnosticLog.Current.Info("notifications.show-submitted", $"card={card.MessageId}");
-        return Task.CompletedTask;
+        DiagnosticLog.Current.Info(
+            "notifications.show-submitted",
+            $"card={card.MessageId} setting={submission.Setting}");
+        return Task.FromResult(submission);
     }
+
+    static AttentionCardNotificationSetting MapSetting(AppNotificationSetting setting) => setting switch
+    {
+        AppNotificationSetting.Enabled => AttentionCardNotificationSetting.Enabled,
+        AppNotificationSetting.DisabledForApplication => AttentionCardNotificationSetting.DisabledForApplication,
+        AppNotificationSetting.DisabledForUser => AttentionCardNotificationSetting.DisabledForUser,
+        AppNotificationSetting.DisabledByGroupPolicy => AttentionCardNotificationSetting.DisabledByGroupPolicy,
+        AppNotificationSetting.DisabledByManifest => AttentionCardNotificationSetting.DisabledByManifest,
+        AppNotificationSetting.Unsupported => AttentionCardNotificationSetting.Unsupported,
+        _ => AttentionCardNotificationSetting.Unsupported,
+    };
 
     /// <summary>Rasterizes <paramref name="icon"/> (a single emoji glyph, per
     /// <see cref="Intercom.AttentionCards.AttentionCardPresets"/>) into a

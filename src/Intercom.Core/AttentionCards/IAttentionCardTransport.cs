@@ -61,21 +61,7 @@ public sealed class PeerControlChannelAttentionCardTransport : IAttentionCardTra
     public PeerControlChannelAttentionCardTransport(PeerControlChannel channel)
     {
         _channel = channel;
-        _channel.MessageReceived += frame =>
-        {
-            if (frame.Type == ControlMessageType.AttentionCard)
-            {
-                FrameReceived?.Invoke(frame);
-            }
-            else if (frame.Type == ControlMessageType.Acknowledged && frame.CorrelationId is Guid correlationId)
-            {
-                Acknowledged?.Invoke(correlationId);
-            }
-            else if (frame.Type == ControlMessageType.Resolved && frame.CorrelationId is Guid resolvedFor)
-            {
-                Resolved?.Invoke(resolvedFor);
-            }
-        };
+        _channel.MessageReceived += OnMessageReceived;
         _channel.DeliveryConfirmed += id => DeliveryConfirmed?.Invoke(id);
         _channel.StateChanged += (previous, next) =>
         {
@@ -93,6 +79,18 @@ public sealed class PeerControlChannelAttentionCardTransport : IAttentionCardTra
     public event Action<Guid>? Acknowledged;
     public event Action<Guid>? Resolved;
     public event Action? ConnectionDropped;
+
+    void OnMessageReceived(ControlFrame frame)
+    {
+        if (frame.Type == ControlMessageType.AttentionCard) { FrameReceived?.Invoke(frame); return; }
+        if (frame.Type == ControlMessageType.Acknowledged) { RaiseCorrelated(frame, Acknowledged); return; }
+        if (frame.Type == ControlMessageType.Resolved) RaiseCorrelated(frame, Resolved);
+    }
+
+    static void RaiseCorrelated(ControlFrame frame, Action<Guid>? receive)
+    {
+        if (frame.CorrelationId is Guid id) receive?.Invoke(id);
+    }
 
     public Task SendAsync(ControlFrame frame, CancellationToken cancellationToken) =>
         _channel.SendAsync(frame, cancellationToken);
@@ -130,33 +128,25 @@ public sealed class LoopbackAttentionCardTransport : IAttentionCardTransport
     public LoopbackAttentionCardTransport(Guid? peerId = null)
     {
         _dispatcher = new FrameDispatcher(new ConnectionTrust.Approved { PeerId = peerId ?? Guid.NewGuid() });
-        _dispatcher.FrameAccepted += frame =>
-        {
-            if (frame.Type == ControlMessageType.Delivered)
-            {
-                if (frame.CorrelationId is Guid deliveredFor) DeliveryConfirmed?.Invoke(deliveredFor);
-                return;
-            }
-            if (frame.Type == ControlMessageType.Acknowledged)
-            {
-                if (frame.CorrelationId is Guid ackedFor) Acknowledged?.Invoke(ackedFor);
-                return;
-            }
-            if (frame.Type == ControlMessageType.Resolved)
-            {
-                if (frame.CorrelationId is Guid resolvedFor) Resolved?.Invoke(resolvedFor);
-                return;
-            }
-            if (frame.Type is not ControlMessageType.Hello)
-            {
-                FrameReceived?.Invoke(frame);
-            }
-        };
+        _dispatcher.FrameAccepted += OnFrameAccepted;
         _dispatcher.DeliveredReceiptReady += receipt => Peer?.DispatchInbound(receipt);
 
         // Bootstraps past FrameDispatcher's "Hello must be first" rule —
         // mirrors LoopbackChatTransport's identical bootstrap.
         _dispatcher.Dispatch(Hello.Current(Capability.AttentionCards).ToFrame(Guid.NewGuid()));
+    }
+
+    void OnFrameAccepted(ControlFrame frame)
+    {
+        if (frame.Type == ControlMessageType.Delivered) { Raise(frame, DeliveryConfirmed); return; }
+        if (frame.Type == ControlMessageType.Acknowledged) { Raise(frame, Acknowledged); return; }
+        if (frame.Type == ControlMessageType.Resolved) { Raise(frame, Resolved); return; }
+        if (frame.Type is not ControlMessageType.Hello) FrameReceived?.Invoke(frame);
+    }
+
+    static void Raise(ControlFrame frame, Action<Guid>? receive)
+    {
+        if (frame.CorrelationId is Guid id) receive?.Invoke(id);
     }
 
     public Task SendAsync(ControlFrame frame, CancellationToken cancellationToken)

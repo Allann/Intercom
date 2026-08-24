@@ -74,6 +74,84 @@ public sealed class GroupFloorSessionTests
         Assert.Null(session.CoordinatorPeerId);
     }
 
+    [Fact]
+    public void JoinAndLowerHandReturnWithoutApplyingFloorCommands()
+    {
+        var session = NewSession();
+        var joined = Guid.NewGuid();
+
+        session.Apply(Command(GroupFloorCommandKind.Join, joined, joined));
+        session.Apply(Command(GroupFloorCommandKind.RaiseHand, joined, joined));
+        session.Apply(Command(GroupFloorCommandKind.LowerHand, joined, joined));
+
+        Assert.Contains(joined, session.Participants);
+        Assert.DoesNotContain(joined, session.RaiseHandQueue);
+        Assert.False(session.Ended);
+    }
+
+    [Fact]
+    public void DuplicateRaiseHandDoesNotDuplicateQueueAndSpeakerCannotQueue()
+    {
+        var session = NewSession();
+        session.Apply(Command(GroupFloorCommandKind.RaiseHand, Low, Low));
+        session.Apply(Command(GroupFloorCommandKind.RaiseHand, Low, Low));
+        session.Apply(Command(GroupFloorCommandKind.GrantFloor, Starter, High));
+        session.Apply(Command(GroupFloorCommandKind.RaiseHand, High, High));
+
+        Assert.Equal([Low], session.RaiseHandQueue);
+        Assert.Equal(High, session.SpeakerPeerId);
+    }
+
+    [Fact]
+    public void GrantRemovesQueuedSpeakerAndEndClearsAllState()
+    {
+        var session = NewSession();
+        session.Apply(Command(GroupFloorCommandKind.RaiseHand, Low, Low));
+        session.Apply(Command(GroupFloorCommandKind.GrantFloor, Starter, Low));
+
+        Assert.Equal(Low, session.SpeakerPeerId);
+        Assert.Empty(session.RaiseHandQueue);
+
+        session.Apply(Command(GroupFloorCommandKind.EndSession, Starter, Guid.Empty));
+
+        Assert.True(session.Ended);
+        Assert.Null(session.SpeakerPeerId);
+        Assert.Null(session.CoordinatorPeerId);
+        Assert.Empty(session.Participants);
+    }
+
+    [Fact]
+    public void UnknownCommandIsRejected()
+    {
+        var session = NewSession();
+
+        Assert.Throws<ArgumentOutOfRangeException>(() => session.Apply(Command((GroupFloorCommandKind)255, Starter, Low)));
+    }
+
+    [Fact]
+    public void RejectsAnotherSessionAndCommandsThatRequireValidActivePeers()
+    {
+        var session = NewSession();
+        var outsider = Guid.NewGuid();
+
+        Assert.Throws<InvalidOperationException>(() => session.Apply(new(Guid.NewGuid(), GroupFloorCommandKind.Join, outsider, outsider)));
+        Assert.Throws<InvalidOperationException>(() => session.Apply(Command(GroupFloorCommandKind.Join, Guid.Empty, Guid.Empty)));
+        Assert.Throws<InvalidOperationException>(() => session.Apply(Command(GroupFloorCommandKind.RaiseHand, outsider, outsider)));
+        Assert.Throws<InvalidOperationException>(() => session.Apply(Command(GroupFloorCommandKind.Interrupt, outsider, outsider)));
+    }
+
+    [Fact]
+    public void EndedSessionIgnoresLaterCommands()
+    {
+        var session = NewSession();
+        session.Apply(Command(GroupFloorCommandKind.EndSession, Starter, Guid.Empty));
+
+        session.Apply(Command(GroupFloorCommandKind.Join, Low, Low));
+
+        Assert.True(session.Ended);
+        Assert.Empty(session.Participants);
+    }
+
     GroupFloorSession NewSession() => new(Guid.Parse("aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa"), Starter, [Starter, Low, High]);
     GroupFloorCommand Command(GroupFloorCommandKind kind, Guid actor, Guid subject) => new(Guid.Parse("aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa"), kind, actor, subject);
 }

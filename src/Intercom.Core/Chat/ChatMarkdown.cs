@@ -27,31 +27,44 @@ public static partial class ChatMarkdown
     public static ChatMarkdownDocument Parse(string source)
     {
         ArgumentNullException.ThrowIfNull(source);
-        var runs = new List<ChatInline>();
-        var plain = new StringBuilder();
-        var inCodeBlock = false;
-        var emittedLine = false;
-        foreach (var originalLine in source.Replace("\r", "").Split('\n'))
-        {
-            if (originalLine.TrimStart().StartsWith("```", StringComparison.Ordinal)) { inCodeBlock = !inCodeBlock; continue; }
-            if (emittedLine) AddText("\n");
-            emittedLine = true;
-            if (inCodeBlock) { AddFormatted(originalLine, code: true); continue; }
+        return new Parser().Parse(source);
+    }
 
-            var line = originalLine;
-            if (line.StartsWith("> ", StringComparison.Ordinal)) { AddText("│ "); line = line[2..]; }
-            else if (line.StartsWith("- ", StringComparison.Ordinal) || line.StartsWith("* ", StringComparison.Ordinal))
-            { AddText("• "); line = line[2..]; }
-            ParseInline(line);
+    sealed class Parser
+    {
+        readonly List<ChatInline> _runs = [];
+        readonly StringBuilder _plain = new();
+        bool _inCodeBlock;
+        bool _emittedLine;
+
+        internal ChatMarkdownDocument Parse(string source)
+        {
+            foreach (var line in source.Replace("\r", "").Split('\n')) ParseLine(line);
+            var text = _plain.ToString();
+            var speech = string.Concat(_runs.Select(SpeechFor)).Replace("│ ", "").Replace("• ", "");
+            return new ChatMarkdownDocument(_runs, text, NormalizeForSpeech(speech));
         }
 
-        var text = plain.ToString();
-        var speech = string.Concat(runs.Select(run => run switch
+        void ParseLine(string originalLine)
         {
-            ChatLinkRun link when !link.RequiresConfirmation => link.Destination.Host,
-            _ => run.Text,
-        })).Replace("│ ", "").Replace("• ", "");
-        return new ChatMarkdownDocument(runs, text, NormalizeForSpeech(speech));
+            if (originalLine.TrimStart().StartsWith("```", StringComparison.Ordinal))
+            {
+                _inCodeBlock = !_inCodeBlock;
+                return;
+            }
+            if (_emittedLine) AddText("\n");
+            _emittedLine = true;
+            if (_inCodeBlock) { AddFormatted(originalLine, code: true); return; }
+            ParseInline(AddPrefix(originalLine));
+        }
+
+        string AddPrefix(string line)
+        {
+            if (line.StartsWith("> ", StringComparison.Ordinal)) { AddText("│ "); return line[2..]; }
+            if (line.StartsWith("- ", StringComparison.Ordinal)) { AddText("• "); return line[2..]; }
+            if (line.StartsWith("* ", StringComparison.Ordinal)) { AddText("• "); return line[2..]; }
+            return line;
+        }
 
         void ParseInline(string line)
         {
@@ -59,40 +72,57 @@ public static partial class ChatMarkdown
             foreach (Match match in InlinePattern().Matches(line))
             {
                 AddText(line[position..match.Index]);
-                var value = match.Value;
-                if (value.StartsWith("![", StringComparison.Ordinal)) AddText(value);
-                else if (match.Groups[1].Success)
-                {
-                    var label = match.Groups[1].Value;
-                    var destination = new Uri(match.Groups[2].Value, UriKind.Absolute);
-                    runs.Add(new ChatLinkRun(label, destination, RequiresConfirmation: true)); plain.Append(label);
-                }
-                else if (value.StartsWith("https://", StringComparison.OrdinalIgnoreCase))
-                {
-                    var uri = new Uri(value, UriKind.Absolute);
-                    runs.Add(new ChatLinkRun(value, uri, RequiresConfirmation: false)); plain.Append(value);
-                }
-                else if (match.Groups[3].Success) AddFormatted(match.Groups[3].Value, bold: true);
-                else if (match.Groups[4].Success) AddFormatted(match.Groups[4].Value, strike: true);
-                else if (match.Groups[5].Success) AddFormatted(match.Groups[5].Value, code: true);
-                else if (match.Groups[6].Success) AddFormatted(match.Groups[6].Value, italic: true);
+                AddMatch(match);
                 position = match.Index + match.Length;
             }
             AddText(line[position..]);
         }
 
+        void AddMatch(Match match)
+        {
+            var value = match.Value;
+            if (value.StartsWith("![", StringComparison.Ordinal)) { AddText(value); return; }
+            if (match.Groups[1].Success) { AddConfirmedLink(match); return; }
+            if (value.StartsWith("https://", StringComparison.OrdinalIgnoreCase)) { AddSharedLink(value); return; }
+            AddFormattedMatch(match);
+        }
+
+        void AddFormattedMatch(Match match)
+        {
+            if (match.Groups[3].Success) { AddFormatted(match.Groups[3].Value, bold: true); return; }
+            if (match.Groups[4].Success) { AddFormatted(match.Groups[4].Value, strike: true); return; }
+            if (match.Groups[5].Success) { AddFormatted(match.Groups[5].Value, code: true); return; }
+            AddFormatted(match.Groups[6].Value, italic: true);
+        }
+
+        void AddConfirmedLink(Match match)
+        {
+            var label = match.Groups[1].Value;
+            _runs.Add(new ChatLinkRun(label, new Uri(match.Groups[2].Value, UriKind.Absolute), true));
+            _plain.Append(label);
+        }
+
+        void AddSharedLink(string value)
+        {
+            _runs.Add(new ChatLinkRun(value, new Uri(value, UriKind.Absolute), false));
+            _plain.Append(value);
+        }
+
         void AddText(string text)
         {
             if (text.Length == 0) return;
-            runs.Add(new ChatTextRun(text));
-            plain.Append(text);
+            _runs.Add(new ChatTextRun(text));
+            _plain.Append(text);
         }
 
         void AddFormatted(string text, bool bold = false, bool italic = false, bool strike = false, bool code = false)
         {
-            runs.Add(new ChatTextRun(text, bold, italic, strike, code));
-            plain.Append(text);
+            _runs.Add(new ChatTextRun(text, bold, italic, strike, code));
+            _plain.Append(text);
         }
+
+        static string SpeechFor(ChatInline run) => run is ChatLinkRun { RequiresConfirmation: false } link
+            ? link.Destination.Host : run.Text;
     }
 
     static string NormalizeForSpeech(string text) =>

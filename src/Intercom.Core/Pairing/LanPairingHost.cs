@@ -19,8 +19,8 @@ public sealed class LanPairingHost : IAsyncDisposable
 {
     readonly IdentityStore _identityStore;
     readonly Func<SpkiPin, Guid?> _resolvePeerId;
-    readonly SslPeerTransportListener _listener;
-    readonly SslPeerTransportConnector _connector;
+    readonly IPeerTransportListener _listener;
+    readonly IPeerTransportConnector _connector;
     readonly object _gate = new();
     readonly Dictionary<Guid, ActivePairing> _pairings = [];
     readonly Dictionary<Guid, TlsPairingTransport> _connections = [];
@@ -54,12 +54,21 @@ public sealed class LanPairingHost : IAsyncDisposable
 
     public LanPairingHost(IdentityStore identityStore, int listenPort, Func<SpkiPin, Guid?> resolvePeerId,
         Capability localCapabilities = Capability.Text | Capability.ChatMarkdown | Capability.ChatImages | Capability.ChatTyping)
+        : this(identityStore, resolvePeerId,
+            new SslPeerTransportListener(identityStore.Identity.Certificate, listenPort),
+            new SslPeerTransportConnector(identityStore.Identity.Certificate), localCapabilities)
+    {
+    }
+
+    internal LanPairingHost(IdentityStore identityStore, Func<SpkiPin, Guid?> resolvePeerId,
+        IPeerTransportListener listener, IPeerTransportConnector connector,
+        Capability localCapabilities = Capability.Text | Capability.ChatMarkdown | Capability.ChatImages | Capability.ChatTyping)
     {
         _identityStore = identityStore;
         _resolvePeerId = resolvePeerId;
         _localCapabilities = localCapabilities;
-        _listener = new SslPeerTransportListener(identityStore.Identity.Certificate, listenPort);
-        _connector = new SslPeerTransportConnector(identityStore.Identity.Certificate);
+        _listener = listener;
+        _connector = connector;
         _listener.ConnectionAccepted += OnConnectionAccepted;
     }
 
@@ -253,18 +262,27 @@ public sealed class LanPairingHost : IAsyncDisposable
         if (sendLocalNonce) await ceremony.StartAsync(cancellationToken).ConfigureAwait(false);
     }
 
-    void PromotePairingConnection(Guid peerId, TlsPairingTransport transport)
+    internal void PromotePairingConnection(Guid peerId, TlsPairingTransport transport)
+    {
+        var promoted = TryPromotePairingConnection(peerId, transport);
+        CompletePromotion(peerId, transport, promoted);
+    }
+
+    bool TryPromotePairingConnection(Guid peerId, TlsPairingTransport transport)
     {
         lock (_gate)
         {
             _pairings.Remove(peerId);
-            if (_connections.TryGetValue(peerId, out var existing) && !ReferenceEquals(existing, transport))
-            {
-                _ = transport.DisposeAsync();
-                return;
-            }
+            _connections.TryGetValue(peerId, out var existing);
+            if (!PairingConnectionPromotion.ShouldPromote(existing, transport)) return false;
             _connections[peerId] = transport;
+            return true;
         }
+    }
+
+    void CompletePromotion(Guid peerId, TlsPairingTransport transport, bool promoted)
+    {
+        if (PairingConnectionPromotion.ShouldDispose(promoted)) { _ = transport.DisposeAsync(); return; }
         WireApprovedTransport(peerId, transport, alreadyStarted: true);
         _ = transport.SendAsync(Hello.Current(_localCapabilities).ToFrame(Guid.NewGuid()), CancellationToken.None);
     }
@@ -296,21 +314,36 @@ public sealed class LanPairingHost : IAsyncDisposable
 
     void OnApprovedFrame(Guid peerId, TlsPairingTransport transport, ControlFrame frame)
     {
-        if (frame.Type == ControlMessageType.Hello)
+        switch (frame.Type)
         {
-            try { lock (_gate) { _peerCapabilities[peerId] = HelloFrameCodec.Decode(frame).Capabilities; } }
-            catch (MalformedFrameException) { }
-            ConnectionsChanged?.Invoke();
-            return;
+            case ControlMessageType.Hello: ReceiveHello(peerId, frame); return;
+            case ControlMessageType.Delivered: ReceiveDelivery(peerId, frame); return;
+            case ControlMessageType.PairingNonce:
+            case ControlMessageType.PairingConfirm:
+            case ControlMessageType.PairingReject: return;
+            default: ReceiveApplicationFrame(peerId, transport, frame); return;
         }
-        if (frame.Type == ControlMessageType.Delivered)
-        {
-            if (frame.CorrelationId is Guid deliveredFor) DeliveryConfirmed?.Invoke(peerId, deliveredFor);
-            return;
-        }
-        if (frame.Type is ControlMessageType.PairingNonce or ControlMessageType.PairingConfirm or ControlMessageType.PairingReject)
-            return;
+    }
 
+    void ReceiveHello(Guid peerId, ControlFrame frame)
+    {
+        try { StoreCapabilities(peerId, HelloFrameCodec.Decode(frame).Capabilities); }
+        catch (MalformedFrameException) { }
+        ConnectionsChanged?.Invoke();
+    }
+
+    void StoreCapabilities(Guid peerId, Capability capabilities)
+    {
+        lock (_gate) { _peerCapabilities[peerId] = capabilities; }
+    }
+
+    void ReceiveDelivery(Guid peerId, ControlFrame frame)
+    {
+        if (frame.CorrelationId is Guid deliveredFor) DeliveryConfirmed?.Invoke(peerId, deliveredFor);
+    }
+
+    void ReceiveApplicationFrame(Guid peerId, TlsPairingTransport transport, ControlFrame frame)
+    {
         ApplicationFrameReceived?.Invoke(peerId, frame);
         _ = transport.SendAsync(new ControlFrame
         {
@@ -445,7 +478,7 @@ public sealed class LanPairingHost : IAsyncDisposable
 
     sealed record ActivePairing(PairingCeremonyCoordinator Ceremony, TlsPairingTransport Transport);
 
-    sealed class TlsPairingTransport(IPeerTransportConnection connection, ControlFrame? firstFrame) : IPairingTransport, IAsyncDisposable
+    internal sealed class TlsPairingTransport(IPeerTransportConnection connection, ControlFrame? firstFrame) : IPairingTransport, IAsyncDisposable
     {
         readonly CancellationTokenSource _cts = new();
         public event Action<ControlFrame>? FrameReceived;
@@ -505,13 +538,10 @@ sealed class LanPeerChatTransport : IChatTransport
     }
     void OnFrame(Guid peerId, ControlFrame frame)
     {
-        if (peerId == _peerId && frame.Type is ControlMessageType.Chat or ControlMessageType.ChatTyping
-            or ControlMessageType.ChatImageStart or ControlMessageType.ChatImageChunk or ControlMessageType.ChatImageComplete
-            or ControlMessageType.ChatImageReceived or ControlMessageType.ChatImageCancelled or ControlMessageType.ChatImageFailed)
-            FrameReceived?.Invoke(frame);
+        LanPeerFrameRouter.ForwardChat(_peerId, peerId, frame, FrameReceived);
     }
-    void OnDelivered(Guid peerId, Guid id) { if (peerId == _peerId) DeliveryConfirmed?.Invoke(id); }
-    void OnDropped(Guid peerId) { if (peerId == _peerId) ConnectionDropped?.Invoke(); }
+    void OnDelivered(Guid peerId, Guid id) => LanPeerFrameRouter.ForwardPeerValue(_peerId, peerId, id, DeliveryConfirmed);
+    void OnDropped(Guid peerId) => LanPeerFrameRouter.ForwardPeerSignal(_peerId, peerId, ConnectionDropped);
     public Task SendAsync(ControlFrame frame, CancellationToken cancellationToken) => _host.SendAsync(_peerId, frame, cancellationToken);
 }
 
@@ -534,13 +564,10 @@ sealed class LanPeerAttentionCardTransport : IAttentionCardTransport
     }
     void OnFrame(Guid peerId, ControlFrame frame)
     {
-        if (peerId != _peerId) return;
-        if (frame.Type == ControlMessageType.AttentionCard) FrameReceived?.Invoke(frame);
-        else if (frame.Type == ControlMessageType.Acknowledged && frame.CorrelationId is Guid ack) Acknowledged?.Invoke(ack);
-        else if (frame.Type == ControlMessageType.Resolved && frame.CorrelationId is Guid resolved) Resolved?.Invoke(resolved);
+        LanPeerFrameRouter.ForwardAttentionCard(_peerId, peerId, frame, FrameReceived, Acknowledged, Resolved);
     }
-    void OnDelivered(Guid peerId, Guid id) { if (peerId == _peerId) DeliveryConfirmed?.Invoke(id); }
-    void OnDropped(Guid peerId) { if (peerId == _peerId) ConnectionDropped?.Invoke(); }
+    void OnDelivered(Guid peerId, Guid id) => LanPeerFrameRouter.ForwardPeerValue(_peerId, peerId, id, DeliveryConfirmed);
+    void OnDropped(Guid peerId) => LanPeerFrameRouter.ForwardPeerSignal(_peerId, peerId, ConnectionDropped);
     public Task SendAsync(ControlFrame frame, CancellationToken cancellationToken) => _host.SendAsync(_peerId, frame, cancellationToken);
 }
 
@@ -561,15 +588,71 @@ sealed class LanPeerAudioControlTransport : IAudioControlTransport
 
     void OnFrame(Guid peerId, ControlFrame frame)
     {
-        if (peerId == _peerId && frame.Type is ControlMessageType.AudioSessionOffer
-            or ControlMessageType.AudioSessionAccepted or ControlMessageType.AudioSessionStopped
-            or ControlMessageType.AudioSessionRejected)
-            FrameReceived?.Invoke(frame);
+        LanPeerFrameRouter.ForwardAudio(_peerId, peerId, frame, FrameReceived);
     }
 
-    void OnDropped(Guid peerId) { if (peerId == _peerId) ConnectionDropped?.Invoke(); }
+    void OnDropped(Guid peerId) => LanPeerFrameRouter.ForwardPeerSignal(_peerId, peerId, ConnectionDropped);
     public Task SendAsync(ControlFrame frame, CancellationToken cancellationToken) =>
         _host.SendAsync(_peerId, frame, cancellationToken);
+}
+
+internal enum AttentionCardFrameRoute { None, Card, Acknowledged, Resolved }
+
+internal static class PairingConnectionPromotion
+{
+    internal static bool ShouldPromote(object? existing, object candidate) =>
+        existing is null || ReferenceEquals(existing, candidate);
+
+    internal static bool ShouldDispose(bool promoted) => !promoted;
+}
+
+internal static class LanPeerFrameRouter
+{
+    internal static void ForwardPeerValue<T>(Guid expectedPeerId, Guid peerId, T value, Action<T>? receive)
+    { if (expectedPeerId == peerId) receive?.Invoke(value); }
+
+    internal static void ForwardPeerSignal(Guid expectedPeerId, Guid peerId, Action? receive)
+    { if (expectedPeerId == peerId) receive?.Invoke(); }
+
+    internal static void ForwardChat(Guid expectedPeerId, Guid peerId, ControlFrame frame, Action<ControlFrame>? receive)
+    { if (IsChatFrame(expectedPeerId, peerId, frame.Type)) receive?.Invoke(frame); }
+
+    internal static void ForwardAudio(Guid expectedPeerId, Guid peerId, ControlFrame frame, Action<ControlFrame>? receive)
+    { if (IsAudioFrame(expectedPeerId, peerId, frame.Type)) receive?.Invoke(frame); }
+
+    internal static void ForwardGroupFloor(Guid peerId, ControlFrame frame, Action<Guid, ControlFrame>? receive)
+    { if (frame.Type == ControlMessageType.GroupFloor) receive?.Invoke(peerId, frame); }
+
+    internal static void ForwardAttentionCard(Guid expectedPeerId, Guid peerId, ControlFrame frame,
+        Action<ControlFrame>? receive, Action<Guid>? acknowledge, Action<Guid>? resolve)
+    {
+        var route = AttentionCardRoute(expectedPeerId, peerId, frame);
+        if (route == AttentionCardFrameRoute.Card) receive?.Invoke(frame);
+        else if (route == AttentionCardFrameRoute.Acknowledged) acknowledge?.Invoke(frame.CorrelationId!.Value);
+        else if (route == AttentionCardFrameRoute.Resolved) resolve?.Invoke(frame.CorrelationId!.Value);
+    }
+
+    internal static bool IsChatFrame(Guid expectedPeerId, Guid peerId, ControlMessageType type) =>
+        expectedPeerId == peerId && type is ControlMessageType.Chat or ControlMessageType.ChatTyping
+            or ControlMessageType.ChatImageStart or ControlMessageType.ChatImageChunk or ControlMessageType.ChatImageComplete
+            or ControlMessageType.ChatImageReceived or ControlMessageType.ChatImageCancelled or ControlMessageType.ChatImageFailed;
+
+    internal static bool IsAudioFrame(Guid expectedPeerId, Guid peerId, ControlMessageType type) =>
+        expectedPeerId == peerId && type is ControlMessageType.AudioSessionOffer
+            or ControlMessageType.AudioSessionAccepted or ControlMessageType.AudioSessionStopped
+            or ControlMessageType.AudioSessionRejected;
+
+    internal static AttentionCardFrameRoute AttentionCardRoute(Guid expectedPeerId, Guid peerId, ControlFrame frame)
+    {
+        if (expectedPeerId != peerId) return AttentionCardFrameRoute.None;
+        return frame.Type switch
+        {
+            ControlMessageType.AttentionCard => AttentionCardFrameRoute.Card,
+            ControlMessageType.Acknowledged when frame.CorrelationId.HasValue => AttentionCardFrameRoute.Acknowledged,
+            ControlMessageType.Resolved when frame.CorrelationId.HasValue => AttentionCardFrameRoute.Resolved,
+            _ => AttentionCardFrameRoute.None,
+        };
+    }
 }
 
 sealed class LanGroupFloorTransport : IGroupFloorTransport, IDisposable
@@ -591,9 +674,7 @@ sealed class LanGroupFloorTransport : IGroupFloorTransport, IDisposable
     }
 
     void OnApplicationFrameReceived(Guid peerId, ControlFrame frame)
-    {
-        if (frame.Type == ControlMessageType.GroupFloor) FrameReceived?.Invoke(peerId, frame);
-    }
+        => LanPeerFrameRouter.ForwardGroupFloor(peerId, frame, FrameReceived);
 
     public void Dispose() => _host.ApplicationFrameReceived -= OnApplicationFrameReceived;
 }

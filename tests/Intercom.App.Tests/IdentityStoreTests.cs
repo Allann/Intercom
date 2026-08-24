@@ -1,3 +1,4 @@
+using System.Net;
 using Intercom.Identity;
 using Xunit;
 
@@ -206,6 +207,137 @@ public class IdentityStoreTests : IDisposable
     }
 
     [Fact]
+    public void FutureDatedPendingPairing_IsRemovedFromPersistedState()
+    {
+        var first = new IdentityStore(_dir);
+        first.LoadOrCreate();
+        first.StartPairing(Guid.NewGuid(), DateTimeOffset.UtcNow + TimeSpan.FromDays(1));
+
+        new IdentityStore(_dir).LoadOrCreate();
+        var third = new IdentityStore(_dir);
+        third.LoadOrCreate();
+
+        Assert.Empty(third.PendingPairings);
+    }
+
+    [Fact]
+    public void ExpiredPendingPairing_IsRemovedFromPersistedState()
+    {
+        var first = new IdentityStore(_dir);
+        first.LoadOrCreate();
+        first.StartPairing(Guid.NewGuid(), DateTimeOffset.UtcNow - IdentityStore.PendingPairingExpiry - TimeSpan.FromMinutes(1));
+
+        new IdentityStore(_dir).LoadOrCreate();
+        var third = new IdentityStore(_dir);
+        third.LoadOrCreate();
+
+        Assert.Empty(third.PendingPairings);
+    }
+
+    [Fact]
+    public void FutureDatedPendingPairing_RewritesThePersistedFile()
+    {
+        var first = new IdentityStore(_dir);
+        first.LoadOrCreate();
+        first.StartPairing(Guid.NewGuid(), DateTimeOffset.UtcNow + TimeSpan.FromDays(1));
+        var path = Path.Combine(_dir, "pending-pairings.dat");
+        var before = File.ReadAllBytes(path);
+
+        new IdentityStore(_dir).LoadOrCreate();
+
+        Assert.NotEqual(before, File.ReadAllBytes(path));
+    }
+
+    [Fact]
+    public void ExpiredPendingPairing_RewritesThePersistedFile()
+    {
+        var first = new IdentityStore(_dir);
+        first.LoadOrCreate();
+        first.StartPairing(Guid.NewGuid(), DateTimeOffset.UtcNow - IdentityStore.PendingPairingExpiry - TimeSpan.FromMinutes(1));
+        var path = Path.Combine(_dir, "pending-pairings.dat");
+        var before = File.ReadAllBytes(path);
+
+        new IdentityStore(_dir).LoadOrCreate();
+
+        Assert.NotEqual(before, File.ReadAllBytes(path));
+    }
+
+    [Fact]
+    public void ValidPendingPairing_IsNotRewrittenDuringLoad()
+    {
+        var first = new IdentityStore(_dir);
+        first.LoadOrCreate();
+        first.StartPairing(Guid.NewGuid(), DateTimeOffset.UtcNow - TimeSpan.FromSeconds(1));
+        var path = Path.Combine(_dir, "pending-pairings.dat");
+        var before = File.ReadAllBytes(path);
+
+        new IdentityStore(_dir).LoadOrCreate();
+
+        Assert.Equal(before, File.ReadAllBytes(path));
+    }
+
+    [Fact]
+    public void PendingLoad_KeepsValidEntryAndRejectsFutureEntry()
+    {
+        var first = new IdentityStore(_dir);
+        first.LoadOrCreate();
+        var validPeer = Guid.NewGuid();
+        first.StartPairing(validPeer, DateTimeOffset.UtcNow - TimeSpan.FromSeconds(1));
+        first.StartPairing(Guid.NewGuid(), DateTimeOffset.UtcNow + TimeSpan.FromDays(1));
+
+        var second = new IdentityStore(_dir);
+        second.LoadOrCreate();
+
+        Assert.Collection(second.PendingPairings, pairing => Assert.Equal(validPeer, pairing.PeerId));
+    }
+
+    [Fact]
+    public void LostIdentity_ClearsPopulatedInMemoryStateAndDeletesPendingFile()
+    {
+        var store = new IdentityStore(_dir);
+        store.LoadOrCreate();
+        store.Approve(MakePeer(44));
+        store.StartPairing(Guid.NewGuid(), DateTimeOffset.UtcNow);
+        File.Delete(Path.Combine(_dir, "identity.dat"));
+
+        store.LoadOrCreate();
+
+        Assert.True(store.IdentityWasRegenerated);
+        Assert.Empty(store.ApprovedPeers);
+        Assert.Empty(store.PendingPairings);
+        Assert.False(File.Exists(Path.Combine(_dir, "pending-pairings.dat")));
+    }
+
+    [Fact]
+    public void PendingPairingStartedExactlyNow_IsRetainedOnLoad()
+    {
+        var now = new DateTimeOffset(2026, 8, 24, 12, 0, 0, TimeSpan.Zero);
+        var peerId = Guid.NewGuid();
+        var first = new IdentityStore(_dir, () => now);
+        first.LoadOrCreate();
+        first.StartPairing(peerId, now);
+
+        var second = new IdentityStore(_dir, () => now);
+        second.LoadOrCreate();
+
+        Assert.Equal(peerId, Assert.Single(second.PendingPairings).PeerId);
+    }
+
+    [Fact]
+    public void MissingRegistry_IsNotReportedAsCorruptionWhenIdentityStillExists()
+    {
+        var first = new IdentityStore(_dir);
+        first.LoadOrCreate();
+        File.Delete(Path.Combine(_dir, "approved-peers.dat"));
+
+        var second = new IdentityStore(_dir);
+        second.LoadOrCreate();
+
+        Assert.False(second.RegistryWasReset);
+        Assert.Empty(second.ApprovedPeers);
+    }
+
+    [Fact]
     public void PendingPairingCorruption_OnAlreadyPopulatedStore_ClearsInMemoryBeforePersisting()
     {
         var store = new IdentityStore(_dir);
@@ -411,5 +543,63 @@ public class IdentityStoreTests : IDisposable
         var justBefore = Epoch + IdentityStore.PendingPairingExpiry - TimeSpan.FromSeconds(1);
 
         Assert.False(pairing.IsExpired(IdentityStore.PendingPairingExpiry, justBefore));
+    }
+
+    [Fact]
+    public void UpdateLastKnownEndpoint_ApprovedPeer_PersistsTrimmedHostname()
+    {
+        var store = new IdentityStore(_dir);
+        store.LoadOrCreate();
+        var peer = store.Approve(MakePeer(42));
+
+        Assert.True(store.UpdateLastKnownEndpoint(peer.PeerId, " vpn.example ", 47811));
+
+        var reloaded = new IdentityStore(_dir);
+        reloaded.LoadOrCreate();
+        Assert.Equal("vpn.example", Assert.Single(reloaded.ApprovedPeers).LastKnownAddress);
+        Assert.Equal(47811, Assert.Single(reloaded.ApprovedPeers).LastKnownPort);
+    }
+
+    [Fact]
+    public void UpdateLastKnownEndpoint_IpAddress_UsesAddressText()
+    {
+        var store = new IdentityStore(_dir);
+        store.LoadOrCreate();
+        var peer = store.Approve(MakePeer(43));
+
+        Assert.True(store.UpdateLastKnownEndpoint(peer.PeerId, IPAddress.Loopback, 47811));
+
+        Assert.Equal("127.0.0.1", Assert.Single(store.ApprovedPeers).LastKnownAddress);
+    }
+
+    [Theory]
+    [InlineData("")]
+    [InlineData("   ")]
+    public void UpdateLastKnownEndpoint_BlankHostname_IsRejected(string host)
+    {
+        var store = new IdentityStore(_dir);
+        Assert.Throws<ArgumentException>(() => store.UpdateLastKnownEndpoint(Guid.NewGuid(), host, 47811));
+    }
+
+    [Theory]
+    [InlineData(0)]
+    [InlineData(65536)]
+    public void UpdateLastKnownEndpoint_InvalidPort_IsRejected(int port)
+    {
+        var store = new IdentityStore(_dir);
+        Assert.Throws<ArgumentOutOfRangeException>(() =>
+            store.UpdateLastKnownEndpoint(Guid.NewGuid(), "host", port));
+    }
+
+    [Fact]
+    public void UpdateLastKnownEndpoint_UnknownOrRevokedPeer_IsRejected()
+    {
+        var store = new IdentityStore(_dir);
+        store.LoadOrCreate();
+        var peer = store.Approve(MakePeer(44));
+        Assert.True(store.Forget(peer.PeerId));
+
+        Assert.False(store.UpdateLastKnownEndpoint(peer.PeerId, "host", 47811));
+        Assert.False(store.UpdateLastKnownEndpoint(Guid.NewGuid(), "host", 47811));
     }
 }

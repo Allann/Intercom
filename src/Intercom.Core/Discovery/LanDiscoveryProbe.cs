@@ -21,6 +21,8 @@ public sealed class LanDiscoveryProbe : IDisposable
     Task? _receiveLoop;
     Timer? _announceTimer;
 
+    internal Action<string>? SendOverride { get; init; }
+
     public event Action<Guid, SpkiPin, IPEndPoint>? PeerAnswered;
 
     public LanDiscoveryProbe(Guid peerId, SpkiPin spki, int controlPort)
@@ -52,18 +54,7 @@ public sealed class LanDiscoveryProbe : IDisposable
             try
             {
                 var received = await _udp.ReceiveAsync(cancellationToken).ConfigureAwait(false);
-                var text = Encoding.UTF8.GetString(received.Buffer);
-                if (text == $"{Prefix}|QUERY") { Send(Advertisement()); continue; }
-                var parts = text.Split('|');
-                if (parts.Length != 5 || parts[0] != Prefix || parts[1] != "HERE" ||
-                    !Guid.TryParseExact(parts[2], "N", out var peerId) || peerId == _peerId ||
-                    !int.TryParse(parts[3], out var port) || port is < 1 or > 65535) continue;
-                SpkiPin spki;
-                try { spki = new SpkiPin(Convert.FromHexString(parts[4])); }
-                catch (Exception ex) when (ex is FormatException or ArgumentException) { continue; }
-                var endpoint = new IPEndPoint(received.RemoteEndPoint.Address, port);
-                DiagnosticLog.Current.Info("discovery.probe-answer", $"peer={peerId} endpoint={endpoint}");
-                PeerAnswered?.Invoke(peerId, spki, endpoint);
+                ProcessReceived(received.Buffer, received.RemoteEndPoint);
             }
             catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested) { return; }
             catch (ObjectDisposedException) when (cancellationToken.IsCancellationRequested) { return; }
@@ -71,13 +62,55 @@ public sealed class LanDiscoveryProbe : IDisposable
         }
     }
 
+    internal void ProcessReceived(byte[] buffer, IPEndPoint remoteEndPoint)
+    {
+        var text = Encoding.UTF8.GetString(buffer);
+        if (text == $"{Prefix}|QUERY") { Send(Advertisement()); return; }
+        if (!TryParseAdvertisement(text, _peerId, out var advertisement)) return;
+
+        var endpoint = new IPEndPoint(remoteEndPoint.Address, advertisement.Port);
+        DiagnosticLog.Current.Info("discovery.probe-answer", $"peer={advertisement.PeerId} endpoint={endpoint}");
+        PeerAnswered?.Invoke(advertisement.PeerId, advertisement.Spki, endpoint);
+    }
+
+    static bool TryParseAdvertisement(string text, Guid localPeerId, out ParsedAdvertisement advertisement)
+    {
+        advertisement = default;
+        var parts = text.Split('|');
+        if (!HasAdvertisementEnvelope(parts)) return false;
+        if (!TryParseRemotePeer(parts[2], localPeerId, out var peerId)) return false;
+        if (!TryParsePort(parts[3], out var port)) return false;
+        if (!TryParseSpki(parts[4], out var spki)) return false;
+        advertisement = new ParsedAdvertisement(peerId, port, spki);
+        return true;
+    }
+
+    static bool HasAdvertisementEnvelope(string[] parts) =>
+        parts.Length == 5 && parts[0] == Prefix && parts[1] == "HERE";
+
+    static bool TryParseRemotePeer(string value, Guid localPeerId, out Guid peerId) =>
+        Guid.TryParseExact(value, "N", out peerId) && peerId != localPeerId;
+
+    static bool TryParsePort(string value, out int port) =>
+        int.TryParse(value, out port) && port is >= 1 and <= 65535;
+
+    static bool TryParseSpki(string value, out SpkiPin spki)
+    {
+        try { spki = new SpkiPin(Convert.FromHexString(value)); return true; }
+        catch (Exception ex) when (ex is FormatException or ArgumentException) { spki = default; return false; }
+    }
+
+    readonly record struct ParsedAdvertisement(Guid PeerId, int Port, SpkiPin Spki);
+
     string Advertisement() => $"HERE|{_peerId:N}|{_controlPort}|{_spki}";
 
     void Send(string payload)
     {
         try
         {
-            var bytes = Encoding.UTF8.GetBytes($"{Prefix}|{payload}");
+            var datagram = $"{Prefix}|{payload}";
+            if (SendOverride is not null) { SendOverride(datagram); return; }
+            var bytes = Encoding.UTF8.GetBytes(datagram);
             _udp.Send(bytes, bytes.Length, new IPEndPoint(IPAddress.Broadcast, Port));
         }
         catch (Exception ex) when (!_cts.IsCancellationRequested)

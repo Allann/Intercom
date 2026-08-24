@@ -1,0 +1,13 @@
+{
+  "allowedDependencies": {
+    "Intercom.App": [
+      "Intercom.Core",
+      "Intercom.App.Runtime"
+    ],
+    "Intercom.App.Runtime": [
+      "Intercom.Core"
+    ],
+    "Intercom.Core": []
+  },
+  "forbidCycles": true
+}

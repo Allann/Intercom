@@ -1,4 +1,5 @@
 using Intercom.Chat;
+using Intercom.ControlChannel;
 using SixLabors.ImageSharp;
 using SixLabors.ImageSharp.PixelFormats;
 using Xunit;
@@ -151,6 +152,73 @@ public sealed class RichChatServiceTests
         Assert.Equal(ChatTransferState.Cancelled, sender.Conversation.Messages.Single().TransferState);
         Assert.Equal(ChatDeliveryState.Undelivered, sender.Conversation.Messages.Single().DeliveryState);
     }
+
+    [Fact]
+    public void TypingFrames_IgnoreMalformedPayloads_AndOnlyReportStateTransitions()
+    {
+        var transport = new LinkedChatTransport();
+        var service = new RichChatService(transport);
+        var changes = new List<bool>();
+        service.PeerTypingChanged += changes.Add;
+
+        transport.Receive(new ControlFrame { Type = ControlMessageType.ChatTyping, MessageId = Guid.NewGuid(), Payload = [] });
+        transport.Receive(new ControlFrame { Type = ControlMessageType.ChatTyping, MessageId = Guid.NewGuid(), Payload = [1] });
+        transport.Receive(new ControlFrame { Type = ControlMessageType.ChatTyping, MessageId = Guid.NewGuid(), Payload = [1] });
+        transport.Receive(new ControlFrame { Type = ControlMessageType.ChatTyping, MessageId = Guid.NewGuid(), Payload = [0] });
+
+        Assert.Equal([true, false], changes);
+        Assert.False(service.IsPeerTyping);
+    }
+
+    [Fact]
+    public void UnrelatedAndMalformedChatFrames_DoNotCreateMessages()
+    {
+        var transport = new LinkedChatTransport();
+        var service = new RichChatService(transport);
+        var received = 0;
+        service.MessageReceived += _ => received++;
+
+        transport.Receive(new ControlFrame { Type = ControlMessageType.Presence, MessageId = Guid.NewGuid(), Payload = [] });
+        transport.Receive(new ControlFrame { Type = ControlMessageType.Chat, MessageId = Guid.NewGuid(), Payload = [] });
+
+        Assert.Empty(service.Conversation.Messages);
+        Assert.Equal(0, received);
+    }
+
+    [Fact]
+    public async Task ConnectionDrop_FailsPendingTextAndImage_AndStopsTyping()
+    {
+        var transport = new LinkedChatTransport();
+        transport.AutoConfirmDelivery = false;
+        var service = new RichChatService(transport);
+        var typingChanges = new List<bool>();
+        service.PeerTypingChanged += typingChanges.Add;
+
+        transport.Receive(new ControlFrame { Type = ControlMessageType.ChatTyping, MessageId = Guid.NewGuid(), Payload = [1] });
+        await service.SendTextAsync("pending", CancellationToken.None);
+        await service.SendImageAsync(
+            new OptimizedChatImage([1, 2, 3], 1, 1, ChatImageFormat.Png), "pending image", CancellationToken.None);
+        var incomingId = Guid.NewGuid();
+        transport.Receive(ChatImageFrameCodec.Start(
+            new OptimizedChatImage([4, 5, 6], 1, 1, ChatImageFormat.Png), "incoming image", incomingId));
+        var postDropUpdates = 0;
+        service.Conversation.MessageUpdated += message =>
+        {
+            if (message.MessageId == incomingId) postDropUpdates++;
+        };
+
+        transport.Drop();
+        postDropUpdates = 0;
+        transport.Receive(ChatImageFrameCodec.Chunk(incomingId, 0, [4]));
+
+        Assert.False(service.IsPeerTyping);
+        Assert.Equal([true, false], typingChanges);
+        Assert.All(service.Conversation.Messages.Where(message => message.Direction == ChatMessageDirection.Sent),
+            message => Assert.Equal(ChatDeliveryState.Undelivered, message.DeliveryState));
+        Assert.All(service.Conversation.Messages.Where(message => message.ContentKind == ChatContentKind.Image && message.Direction == ChatMessageDirection.Sent),
+            image => Assert.Equal(ChatTransferState.Failed, image.TransferState));
+        Assert.Equal(0, postDropUpdates);
+    }
 }
 
 sealed class LinkedChatTransport : IChatTransport
@@ -160,6 +228,7 @@ sealed class LinkedChatTransport : IChatTransport
         Intercom.ControlChannel.Capability.Text | Intercom.ControlChannel.Capability.ChatMarkdown
         | Intercom.ControlChannel.Capability.ChatImages | Intercom.ControlChannel.Capability.ChatTyping;
     public int SendCount { get; private set; }
+    public bool AutoConfirmDelivery { get; set; } = true;
     public event Action<Intercom.ControlChannel.ControlFrame>? Sending;
     public event Action<Intercom.ControlChannel.ControlFrame>? FrameReceived;
     public event Action<Guid>? DeliveryConfirmed;
@@ -170,11 +239,12 @@ sealed class LinkedChatTransport : IChatTransport
         SendCount++;
         Sending?.Invoke(frame);
         Peer?.FrameReceived?.Invoke(frame);
-        DeliveryConfirmed?.Invoke(frame.MessageId);
+        if (AutoConfirmDelivery) DeliveryConfirmed?.Invoke(frame.MessageId);
         return Task.CompletedTask;
     }
 
     public void Link(LinkedChatTransport peer) => Peer = peer;
+    public void Receive(Intercom.ControlChannel.ControlFrame frame) => FrameReceived?.Invoke(frame);
     public void Drop() => ConnectionDropped?.Invoke();
 
     public static (LinkedChatTransport A, LinkedChatTransport B) CreatePair()

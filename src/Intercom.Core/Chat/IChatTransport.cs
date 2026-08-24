@@ -37,35 +37,50 @@ public interface IChatTransport
 /// <see cref="IChatTransport"/> for production wiring.</summary>
 public sealed class PeerControlChannelChatTransport : IChatTransport
 {
+    static readonly HashSet<ControlMessageType> ChatFrameTypes =
+    [
+        ControlMessageType.Chat, ControlMessageType.ChatTyping, ControlMessageType.ChatImageStart,
+        ControlMessageType.ChatImageChunk, ControlMessageType.ChatImageComplete, ControlMessageType.ChatImageReceived,
+        ControlMessageType.ChatImageCancelled, ControlMessageType.ChatImageFailed,
+    ];
     readonly PeerControlChannel _channel;
+    Action<ControlFrame> _frameReceived = delegate { };
 
     public PeerControlChannelChatTransport(PeerControlChannel channel)
     {
         _channel = channel;
-        _channel.MessageReceived += frame =>
-        {
-            if (frame.Type is ControlMessageType.Chat or ControlMessageType.ChatTyping
-                or ControlMessageType.ChatImageStart or ControlMessageType.ChatImageChunk or ControlMessageType.ChatImageComplete
-                or ControlMessageType.ChatImageReceived or ControlMessageType.ChatImageCancelled or ControlMessageType.ChatImageFailed)
-                FrameReceived?.Invoke(frame);
-        };
-        _channel.DeliveryConfirmed += id => DeliveryConfirmed?.Invoke(id);
-        _channel.StateChanged += (previous, next) =>
-        {
-            // Only a genuine drop away FROM Connected counts — StateChanged
-            // fires on every transition (Idle -> Discovered, Discovered ->
-            // Connecting, etc.), and none of those on their own mean a
-            // message that was actually in flight lost its connection.
-            if (previous is ConnState.Connected && next is not ConnState.Connected)
-            {
-                ConnectionDropped?.Invoke();
-            }
-        };
+        _channel.MessageReceived += OnMessageReceived;
+        _channel.DeliveryConfirmed += OnDeliveryConfirmed;
+        _channel.StateChanged += OnStateChanged;
     }
 
-    public event Action<ControlFrame>? FrameReceived;
+    public event Action<ControlFrame>? FrameReceived
+    {
+        add => _frameReceived += value!;
+        remove
+        {
+            var handler = value;
+            if (handler is null) return;
+            var remaining = _frameReceived - handler;
+            _frameReceived = remaining ?? delegate { };
+        }
+    }
     public event Action<Guid>? DeliveryConfirmed;
     public event Action? ConnectionDropped;
+
+    void OnMessageReceived(ControlFrame frame)
+    {
+        if (!IsChatFrame(frame.Type)) return;
+        _frameReceived(frame);
+    }
+
+    static bool IsChatFrame(ControlMessageType type) => ChatFrameTypes.Contains(type);
+
+    void OnDeliveryConfirmed(Guid id) => DeliveryConfirmed?.Invoke(id);
+    void OnStateChanged(ConnState previous, ConnState next)
+    {
+        if (previous is ConnState.Connected && next is not ConnState.Connected) ConnectionDropped?.Invoke();
+    }
 
     public Task SendAsync(ControlFrame frame, CancellationToken cancellationToken) =>
         _channel.SendAsync(frame, cancellationToken);

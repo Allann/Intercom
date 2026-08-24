@@ -36,8 +36,7 @@ public static class ChatImageFrameCodec
         var height = BinaryPrimitives.ReadInt32BigEndian(frame.Payload.AsSpan(8));
         var format = (ChatImageFormat)frame.Payload[12];
         var captionLength = BinaryPrimitives.ReadUInt16BigEndian(frame.Payload.AsSpan(13));
-        if (total is <= 0 or > ChatImageOptimizer.MaxTransferBytes || width <= 0 || height <= 0
-            || format is not (ChatImageFormat.Jpeg or ChatImageFormat.Png)
+        if (!HasValidSize(total, width, height) || !HasValidFormat(format)
             || frame.Payload.Length != StartFixedSize + captionLength)
             throw new MalformedFrameException("Image start metadata is outside the accepted bounds.");
         string caption;
@@ -45,6 +44,12 @@ public static class ChatImageFrameCodec
         catch (DecoderFallbackException) { throw new MalformedFrameException("Image caption is not valid UTF-8."); }
         return new ChatImageStart(total, width, height, format, caption, frame.Payload.AsSpan(15, 32).ToArray());
     }
+
+    static bool HasValidSize(int total, int width, int height) =>
+        total > 0 && total <= ChatImageOptimizer.MaxTransferBytes && width > 0 && height > 0;
+
+    static bool HasValidFormat(ChatImageFormat format) =>
+        format is ChatImageFormat.Jpeg or ChatImageFormat.Png;
 
     public static ControlFrame Chunk(Guid transferId, int offset, ReadOnlySpan<byte> bytes)
     {

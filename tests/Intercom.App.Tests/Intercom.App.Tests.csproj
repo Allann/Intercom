@@ -8,13 +8,24 @@
   </PropertyGroup>
 
   <ItemGroup>
+    <PackageReference Include="CsCheck" Version="4.8.0" />
     <PackageReference Include="Microsoft.NET.Test.Sdk" Version="17.12.0" />
+    <PackageReference Include="coverlet.collector" Version="6.0.4">
+      <PrivateAssets>all</PrivateAssets>
+      <IncludeAssets>runtime; build; native; contentfiles; analyzers; buildtransitive</IncludeAssets>
+    </PackageReference>
+    <PackageReference Include="Reqnroll.xUnit" Version="3.3.4" />
     <PackageReference Include="xunit" Version="2.9.2" />
     <PackageReference Include="xunit.runner.visualstudio" Version="2.8.2" />
   </ItemGroup>
 
   <ItemGroup>
     <ProjectReference Include="..\..\src\Intercom.Core\Intercom.Core.csproj" />
+    <ProjectReference Include="..\..\src\Intercom.App.Runtime\Intercom.App.Runtime.csproj" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <ReqnrollFeatureFile Include="..\Intercom.App.Acceptance\ProductionCodeCoverage.feature" Link="Acceptance\ProductionCodeCoverage.feature" />
   </ItemGroup>
 
 </Project>

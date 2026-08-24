@@ -78,6 +78,18 @@ public class DiscoveryServiceTests
     }
 
     [Fact]
+    public void Start_WhenBrowseFails_RethrowsTheOriginalFailure()
+    {
+        var failure = new IOException("browse failed");
+        var dns = new FakeDnsServiceDiscovery { BrowseFailure = failure };
+        var service = MakeService(dns, new FakeInterfaceSnapshotProvider([Eligible("eth0")]), new FakeNetworkChangeNotifier());
+
+        var actual = Assert.Throws<IOException>(() => service.Start());
+
+        Assert.Same(failure, actual);
+    }
+
+    [Fact]
     public void BrowseSignal_PopulatesVisiblePeers()
     {
         var dns = new FakeDnsServiceDiscovery();
@@ -299,6 +311,7 @@ public class DiscoveryServiceTests
 
     sealed class FakeDnsServiceDiscovery : IDnsServiceDiscovery
     {
+        public Exception? BrowseFailure { get; init; }
         public List<FakeRegistration> Registrations { get; } = [];
         public List<FakeBrowse> Browses { get; } = [];
 
@@ -311,6 +324,7 @@ public class DiscoveryServiceTests
 
         public IDisposable Browse(LanInterface iface, Action<DiscoverySignal> onSignal)
         {
+            if (BrowseFailure is not null) throw BrowseFailure;
             var browse = new FakeBrowse(iface, onSignal);
             Browses.Add(browse);
             return browse;

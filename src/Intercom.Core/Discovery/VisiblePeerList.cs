@@ -59,11 +59,17 @@ public sealed class VisiblePeerList
     /// concurrently from multiple interfaces' browse threads.</summary>
     public void Observe(DiscoverySignal signal, DateTimeOffset now)
     {
-        var changed = false;
-
-        switch (signal)
+        var changed = signal switch
         {
-            case DiscoverySignal.Seen seen:
+            DiscoverySignal.Seen seen => ObserveSeen(seen, now),
+            DiscoverySignal.Withdrawn => ObserveWithdrawn(signal),
+            _ => false,
+        };
+        if (changed) Changed?.Invoke();
+    }
+
+    bool ObserveSeen(DiscoverySignal.Seen seen, DateTimeOffset now)
+    {
                 // Normalize here rather than trusting the caller: InterfaceId
                 // is carried on both the signal and its Endpoint, and this is
                 // the one place that turns a raw signal into stored state, so
@@ -71,17 +77,17 @@ public sealed class VisiblePeerList
                 // disagree (a mismatch would otherwise silently key a
                 // sighting under one interface while its endpoint claims
                 // another).
-                var endpoint = seen.Endpoint.InterfaceId == signal.InterfaceId
+                var endpoint = seen.Endpoint.InterfaceId == seen.InterfaceId
                     ? seen.Endpoint
-                    : seen.Endpoint with { InterfaceId = signal.InterfaceId };
-                var key = new SightingKey(signal.PeerIdHint, signal.InterfaceId, endpoint.Address.AddressFamily);
+                    : seen.Endpoint with { InterfaceId = seen.InterfaceId };
+                var key = new SightingKey(seen.PeerIdHint, seen.InterfaceId, endpoint.Address.AddressFamily);
                 lock (_gate)
                 {
                     var firstSeenAt = _sightings.TryGetValue(key, out var existing) ? existing.FirstSeenAt : now;
                     _sightings[key] = new Sighting
                     {
-                        PeerIdHint = signal.PeerIdHint,
-                        InterfaceId = signal.InterfaceId,
+                        PeerIdHint = seen.PeerIdHint,
+                        InterfaceId = seen.InterfaceId,
                         ProtocolVersion = seen.ProtocolVersion,
                         Spki = seen.Spki,
                         Endpoint = endpoint,
@@ -90,10 +96,11 @@ public sealed class VisiblePeerList
                         ExpiresAt = now + seen.Ttl,
                     };
                 }
-                changed = true;
-                break;
+        return true;
+    }
 
-            case DiscoverySignal.Withdrawn:
+    bool ObserveWithdrawn(DiscoverySignal signal)
+    {
                 // A goodbye record withdraws the whole service instance, not
                 // one address family — remove every sighting for this peer on
                 // this interface (IPv4 and IPv6 alike). Same as TTL expiry
@@ -105,12 +112,8 @@ public sealed class VisiblePeerList
                         .Where(k => k.PeerIdHint == signal.PeerIdHint && k.InterfaceId == signal.InterfaceId)
                         .ToList();
                     foreach (var k in withdrawnKeys) _sightings.Remove(k);
-                    changed = withdrawnKeys.Count > 0;
+                    return withdrawnKeys.Count > 0;
                 }
-                break;
-        }
-
-        if (changed) Changed?.Invoke();
     }
 
     /// <summary>Removes every sighting whose TTL has lapsed as of <paramref
