@@ -1,0 +1,371 @@
+{
+  "Assembly": "Intercom.Core",
+  "Threshold": 15.0,
+  "MethodCount": 816,
+  "Offenders": [
+    {
+      "Method": "Intercom.Chat.ChatImageStart Intercom.Chat.ChatImageFrameCodec::DecodeStart(Intercom.ControlChannel.ControlFrame)",
+      "File": "M:\\Intercom\\src\\Intercom.Core\\Chat\\ChatImageFrameCodec.cs",
+      "Complexity": 20,
+      "Coverage": 86.67,
+      "Crap": 20.95
+    },
+    {
+      "Method": "Intercom.Chat.ChatMarkdownDocument Intercom.Chat.ChatMarkdown::Parse(System.String)",
+      "File": "M:\\Intercom\\src\\Intercom.Core\\Chat\\ChatMarkdown.cs",
+      "Complexity": 18,
+      "Coverage": 100.0,
+      "Crap": 18.0
+    },
+    {
+      "Method": "System.Boolean Intercom.ControlChannel.FrameDispatcher::Dispatch(Intercom.ControlChannel.ControlFrame)",
+      "File": "M:\\Intercom\\src\\Intercom.Core\\ControlChannel\\FrameDispatcher.cs",
+      "Complexity": 18,
+      "Coverage": 100.0,
+      "Crap": 18.0
+    },
+    {
+      "Method": "System.Boolean Intercom.Identity.IdentityStore::UpdateLastKnownEndpoint(System.Guid,System.Net.IPAddress,System.Int32)",
+      "File": "M:\\Intercom\\src\\Intercom.Core\\Identity\\IdentityStore.cs",
+      "Complexity": 4,
+      "Coverage": 0.0,
+      "Crap": 20.0
+    },
+    {
+      "Method": "System.Boolean Intercom.Identity.IdentityStore::UpdateLastKnownEndpoint(System.Guid,System.String,System.Int32)",
+      "File": "M:\\Intercom\\src\\Intercom.Core\\Identity\\IdentityStore.cs",
+      "Complexity": 14,
+      "Coverage": 0.0,
+      "Crap": 210.0
+    },
+    {
+      "Method": "System.Boolean Intercom.Updates.AppVersion::TryParse(System.String,Intercom.Updates.AppVersion&)",
+      "File": "M:\\Intercom\\src\\Intercom.Core\\Updates\\AppVersion.cs",
+      "Complexity": 20,
+      "Coverage": 100.0,
+      "Crap": 20.0
+    },
+    {
+      "Method": "System.Collections.Generic.IReadOnlyList`1<Intercom.Discovery.LanInterface> Intercom.Discovery.SystemNetworkInterfaceSnapshotProvider::GetCurrentInterfaces()",
+      "File": "M:\\Intercom\\src\\Intercom.Core\\Discovery\\SystemNetworkInterfaceSnapshotProvider.cs",
+      "Complexity": 10,
+      "Coverage": 0.0,
+      "Crap": 110.0
+    },
+    {
+      "Method": "System.IntPtr Intercom.Discovery.Win32DnsServiceDiscovery/NativeServiceInstance::AllocStringArray(System.Collections.Generic.IEnumerable`1<System.String>)",
+      "File": "M:\\Intercom\\src\\Intercom.Core\\Discovery\\Win32DnsServiceDiscovery.cs",
+      "Complexity": 4,
+      "Coverage": 0.0,
+      "Crap": 20.0
+    },
+    {
+      "Method": "System.Nullable`1<Intercom.Discovery.Win32DnsServiceDiscovery/CachedInstance> Intercom.Discovery.Win32DnsServiceDiscovery/DnsRecordParser::ParseResolvedInstance(System.IntPtr,System.Int32)",
+      "File": "M:\\Intercom\\src\\Intercom.Core\\Discovery\\Win32DnsServiceDiscovery.cs",
+      "Complexity": 28,
+      "Coverage": 0.0,
+      "Crap": 812.0
+    },
+    {
+      "Method": "System.String Intercom.Audio.AudioMeasurementProfileParser::ToConfigValue(Intercom.Audio.AudioMeasurementProfile)",
+      "File": "M:\\Intercom\\src\\Intercom.Core\\Audio\\AudioMeasurement.cs",
+      "Complexity": 5,
+      "Coverage": 0.0,
+      "Crap": 30.0
+    },
+    {
+      "Method": "System.Void Intercom.AttentionCards.LoopbackAttentionCardTransport::<.ctor>b__20_0(Intercom.ControlChannel.ControlFrame)",
+      "File": "M:\\Intercom\\src\\Intercom.Core\\AttentionCards\\IAttentionCardTransport.cs",
+      "Complexity": 28,
+      "Coverage": 83.33,
+      "Crap": 31.63
+    },
+    {
+      "Method": "System.Void Intercom.AttentionCards.PeerControlChannelAttentionCardTransport::<.ctor>b__1_0(Intercom.ControlChannel.ControlFrame)",
+      "File": "M:\\Intercom\\src\\Intercom.Core\\AttentionCards\\IAttentionCardTransport.cs",
+      "Complexity": 20,
+      "Coverage": 71.43,
+      "Crap": 29.33
+    },
+    {
+      "Method": "System.Void Intercom.Audio.AdaptiveJitterBuffer::RecordAndAdapt(System.Boolean)",
+      "File": "M:\\Intercom\\src\\Intercom.Core\\Audio\\AdaptiveJitterBuffer.cs",
+      "Complexity": 12,
+      "Coverage": 62.5,
+      "Crap": 19.59
+    },
+    {
+      "Method": "System.Void Intercom.Chat.PeerControlChannelChatTransport::<.ctor>b__1_0(Intercom.ControlChannel.ControlFrame)",
+      "File": "M:\\Intercom\\src\\Intercom.Core\\Chat\\IChatTransport.cs",
+      "Complexity": 8,
+      "Coverage": 16.67,
+      "Crap": 45.04
+    },
+    {
+      "Method": "System.Void Intercom.Chat.RichChatService::OnConnectionDropped()",
+      "File": "M:\\Intercom\\src\\Intercom.Core\\Chat\\RichChatService.cs",
+      "Complexity": 8,
+      "Coverage": 0.0,
+      "Crap": 72.0
+    },
+    {
+      "Method": "System.Void Intercom.Chat.RichChatService::OnFrameReceived(Intercom.ControlChannel.ControlFrame)",
+      "File": "M:\\Intercom\\src\\Intercom.Core\\Chat\\RichChatService.cs",
+      "Complexity": 26,
+      "Coverage": 95.45,
+      "Crap": 26.06
+    },
+    {
+      "Method": "System.Void Intercom.ControlChannel.SslPeerTransportListener::Dispose()",
+      "File": "M:\\Intercom\\src\\Intercom.Core\\ControlChannel\\SslPeerTransportListener.cs",
+      "Complexity": 4,
+      "Coverage": 0.0,
+      "Crap": 20.0
+    },
+    {
+      "Method": "System.Void Intercom.Discovery.DiscoveryService::ReEvaluate()",
+      "File": "M:\\Intercom\\src\\Intercom.Core\\Discovery\\DiscoveryService.cs",
+      "Complexity": 18,
+      "Coverage": 89.47,
+      "Crap": 18.38
+    },
+    {
+      "Method": "System.Void Intercom.Discovery.VisiblePeerList::Observe(Intercom.Discovery.DiscoverySignal,System.DateTimeOffset)",
+      "File": "M:\\Intercom\\src\\Intercom.Core\\Discovery\\VisiblePeerList.cs",
+      "Complexity": 16,
+      "Coverage": 100.0,
+      "Crap": 16.0
+    },
+    {
+      "Method": "System.Void Intercom.Discovery.Win32DnsServiceDiscovery/NativeServiceInstance::.ctor(System.String,System.String,System.Net.IPAddress,System.Net.IPAddress,System.UInt16,System.Collections.Generic.Dictionary`2<System.String,System.String>)",
+      "File": "M:\\Intercom\\src\\Intercom.Core\\Discovery\\Win32DnsServiceDiscovery.cs",
+      "Complexity": 4,
+      "Coverage": 0.0,
+      "Crap": 20.0
+    },
+    {
+      "Method": "System.Void Intercom.Discovery.Win32DnsServiceDiscovery/NativeServiceInstance::Dispose()",
+      "File": "M:\\Intercom\\src\\Intercom.Core\\Discovery\\Win32DnsServiceDiscovery.cs",
+      "Complexity": 4,
+      "Coverage": 0.0,
+      "Crap": 20.0
+    },
+    {
+      "Method": "System.Void Intercom.Discovery.Win32DnsServiceDiscovery/PendingResolve::.ctor(System.String,System.UInt32,System.Int32,Intercom.Discovery.Win32DnsServiceDiscovery/DNS_SERVICE_RESOLVE_COMPLETE)",
+      "File": "M:\\Intercom\\src\\Intercom.Core\\Discovery\\Win32DnsServiceDiscovery.cs",
+      "Complexity": 4,
+      "Coverage": 0.0,
+      "Crap": 20.0
+    },
+    {
+      "Method": "System.Void Intercom.Discovery.Win32DnsServiceDiscovery/PendingResolve::FreeHandles()",
+      "File": "M:\\Intercom\\src\\Intercom.Core\\Discovery\\Win32DnsServiceDiscovery.cs",
+      "Complexity": 6,
+      "Coverage": 0.0,
+      "Crap": 42.0
+    },
+    {
+      "Method": "System.Void Intercom.Discovery.Win32DnsServiceDiscovery/ServiceBrowse::.ctor(System.String,System.String,System.Int32,System.Int32,System.Action`1<Intercom.Discovery.DiscoverySignal>)",
+      "File": "M:\\Intercom\\src\\Intercom.Core\\Discovery\\Win32DnsServiceDiscovery.cs",
+      "Complexity": 4,
+      "Coverage": 0.0,
+      "Crap": 20.0
+    },
+    {
+      "Method": "System.Void Intercom.Discovery.Win32DnsServiceDiscovery/ServiceBrowse::Dispose()",
+      "File": "M:\\Intercom\\src\\Intercom.Core\\Discovery\\Win32DnsServiceDiscovery.cs",
+      "Complexity": 4,
+      "Coverage": 0.0,
+      "Crap": 20.0
+    },
+    {
+      "Method": "System.Void Intercom.Discovery.Win32DnsServiceDiscovery/ServiceBrowse::EmitSeenSignals(Intercom.Discovery.Win32DnsServiceDiscovery/CachedInstance,System.UInt32)",
+      "File": "M:\\Intercom\\src\\Intercom.Core\\Discovery\\Win32DnsServiceDiscovery.cs",
+      "Complexity": 4,
+      "Coverage": 0.0,
+      "Crap": 20.0
+    },
+    {
+      "Method": "System.Void Intercom.Discovery.Win32DnsServiceDiscovery/ServiceBrowse::FreeSelfRootingLocked()",
+      "File": "M:\\Intercom\\src\\Intercom.Core\\Discovery\\Win32DnsServiceDiscovery.cs",
+      "Complexity": 6,
+      "Coverage": 0.0,
+      "Crap": 42.0
+    },
+    {
+      "Method": "System.Void Intercom.Discovery.Win32DnsServiceDiscovery/ServiceBrowse::HandleAdd(System.String,System.UInt32)",
+      "File": "M:\\Intercom\\src\\Intercom.Core\\Discovery\\Win32DnsServiceDiscovery.cs",
+      "Complexity": 8,
+      "Coverage": 0.0,
+      "Crap": 72.0
+    },
+    {
+      "Method": "System.Void Intercom.Discovery.Win32DnsServiceDiscovery/ServiceBrowse::HandleGoodbye(System.String)",
+      "File": "M:\\Intercom\\src\\Intercom.Core\\Discovery\\Win32DnsServiceDiscovery.cs",
+      "Complexity": 10,
+      "Coverage": 0.0,
+      "Crap": 110.0
+    },
+    {
+      "Method": "System.Void Intercom.Discovery.Win32DnsServiceDiscovery/ServiceBrowse::OnBrowseCallback(System.UInt32,System.IntPtr,System.IntPtr)",
+      "File": "M:\\Intercom\\src\\Intercom.Core\\Discovery\\Win32DnsServiceDiscovery.cs",
+      "Complexity": 12,
+      "Coverage": 0.0,
+      "Crap": 156.0
+    },
+    {
+      "Method": "System.Void Intercom.Discovery.Win32DnsServiceDiscovery/ServiceBrowse::OnResolveComplete(System.UInt32,System.IntPtr,System.IntPtr)",
+      "File": "M:\\Intercom\\src\\Intercom.Core\\Discovery\\Win32DnsServiceDiscovery.cs",
+      "Complexity": 22,
+      "Coverage": 0.0,
+      "Crap": 506.0
+    },
+    {
+      "Method": "System.Void Intercom.Discovery.Win32DnsServiceDiscovery/ServiceRegistration::.ctor(System.String,System.String,System.Net.IPAddress,System.Net.IPAddress,System.Int32,Intercom.Discovery.PeerIdHint,System.Nullable`1<Intercom.Identity.SpkiPin>,System.Int32)",
+      "File": "M:\\Intercom\\src\\Intercom.Core\\Discovery\\Win32DnsServiceDiscovery.cs",
+      "Complexity": 10,
+      "Coverage": 0.0,
+      "Crap": 110.0
+    },
+    {
+      "Method": "System.Void Intercom.Discovery.Win32DnsServiceDiscovery/ServiceRegistration::Dispose()",
+      "File": "M:\\Intercom\\src\\Intercom.Core\\Discovery\\Win32DnsServiceDiscovery.cs",
+      "Complexity": 6,
+      "Coverage": 0.0,
+      "Crap": 42.0
+    },
+    {
+      "Method": "System.Void Intercom.Discovery.Win32DnsServiceDiscovery/ServiceRegistration::OnCompletion(System.UInt32,System.IntPtr,System.IntPtr)",
+      "File": "M:\\Intercom\\src\\Intercom.Core\\Discovery\\Win32DnsServiceDiscovery.cs",
+      "Complexity": 4,
+      "Coverage": 0.0,
+      "Crap": 20.0
+    },
+    {
+      "Method": "System.Void Intercom.Discovery.Win32DnsServiceDiscovery/ServiceRegistration::TryFreeOwnBufferLocked()",
+      "File": "M:\\Intercom\\src\\Intercom.Core\\Discovery\\Win32DnsServiceDiscovery.cs",
+      "Complexity": 8,
+      "Coverage": 0.0,
+      "Crap": 72.0
+    },
+    {
+      "Method": "System.Void Intercom.GroupVoice.GroupFloorService::OnFrameReceived(System.Guid,Intercom.ControlChannel.ControlFrame)",
+      "File": "M:\\Intercom\\src\\Intercom.Core\\GroupVoice\\GroupFloorService.cs",
+      "Complexity": 12,
+      "Coverage": 66.67,
+      "Crap": 17.33
+    },
+    {
+      "Method": "System.Void Intercom.GroupVoice.GroupFloorSession::Apply(Intercom.GroupVoice.GroupFloorCommand)",
+      "File": "M:\\Intercom\\src\\Intercom.Core\\GroupVoice\\GroupFloorSession.cs",
+      "Complexity": 18,
+      "Coverage": 90.0,
+      "Crap": 18.32
+    },
+    {
+      "Method": "System.Void Intercom.Identity.IdentityStore::LoadOrCreate()",
+      "File": "M:\\Intercom\\src\\Intercom.Core\\Identity\\IdentityStore.cs",
+      "Complexity": 22,
+      "Coverage": 100.0,
+      "Crap": 22.0
+    },
+    {
+      "Method": "System.Void Intercom.Pairing.LanGroupFloorTransport::OnApplicationFrameReceived(System.Guid,Intercom.ControlChannel.ControlFrame)",
+      "File": "M:\\Intercom\\src\\Intercom.Core\\Pairing\\LanPairingHost.cs",
+      "Complexity": 4,
+      "Coverage": 0.0,
+      "Crap": 20.0
+    },
+    {
+      "Method": "System.Void Intercom.Pairing.LanPairingHost::OnApprovedFrame(System.Guid,Intercom.Pairing.LanPairingHost/TlsPairingTransport,Intercom.ControlChannel.ControlFrame)",
+      "File": "M:\\Intercom\\src\\Intercom.Core\\Pairing\\LanPairingHost.cs",
+      "Complexity": 18,
+      "Coverage": 0.0,
+      "Crap": 342.0
+    },
+    {
+      "Method": "System.Void Intercom.Pairing.LanPairingHost::OnConnectionDropped(System.Guid,Intercom.Pairing.LanPairingHost/TlsPairingTransport)",
+      "File": "M:\\Intercom\\src\\Intercom.Core\\Pairing\\LanPairingHost.cs",
+      "Complexity": 8,
+      "Coverage": 0.0,
+      "Crap": 72.0
+    },
+    {
+      "Method": "System.Void Intercom.Pairing.LanPairingHost::PromotePairingConnection(System.Guid,Intercom.Pairing.LanPairingHost/TlsPairingTransport)",
+      "File": "M:\\Intercom\\src\\Intercom.Core\\Pairing\\LanPairingHost.cs",
+      "Complexity": 4,
+      "Coverage": 0.0,
+      "Crap": 20.0
+    },
+    {
+      "Method": "System.Void Intercom.Pairing.LanPairingHost::WireApprovedTransport(System.Guid,Intercom.Pairing.LanPairingHost/TlsPairingTransport,System.Boolean)",
+      "File": "M:\\Intercom\\src\\Intercom.Core\\Pairing\\LanPairingHost.cs",
+      "Complexity": 4,
+      "Coverage": 0.0,
+      "Crap": 20.0
+    },
+    {
+      "Method": "System.Void Intercom.Pairing.LanPairingHost/TlsPairingTransport::Start()",
+      "File": "M:\\Intercom\\src\\Intercom.Core\\Pairing\\LanPairingHost.cs",
+      "Complexity": 4,
+      "Coverage": 0.0,
+      "Crap": 20.0
+    },
+    {
+      "Method": "System.Void Intercom.Pairing.LanPeerAttentionCardTransport::OnDelivered(System.Guid,System.Guid)",
+      "File": "M:\\Intercom\\src\\Intercom.Core\\Pairing\\LanPairingHost.cs",
+      "Complexity": 4,
+      "Coverage": 0.0,
+      "Crap": 20.0
+    },
+    {
+      "Method": "System.Void Intercom.Pairing.LanPeerAttentionCardTransport::OnDropped(System.Guid)",
+      "File": "M:\\Intercom\\src\\Intercom.Core\\Pairing\\LanPairingHost.cs",
+      "Complexity": 4,
+      "Coverage": 0.0,
+      "Crap": 20.0
+    },
+    {
+      "Method": "System.Void Intercom.Pairing.LanPeerAttentionCardTransport::OnFrame(System.Guid,Intercom.ControlChannel.ControlFrame)",
+      "File": "M:\\Intercom\\src\\Intercom.Core\\Pairing\\LanPairingHost.cs",
+      "Complexity": 22,
+      "Coverage": 0.0,
+      "Crap": 506.0
+    },
+    {
+      "Method": "System.Void Intercom.Pairing.LanPeerAudioControlTransport::OnDropped(System.Guid)",
+      "File": "M:\\Intercom\\src\\Intercom.Core\\Pairing\\LanPairingHost.cs",
+      "Complexity": 4,
+      "Coverage": 0.0,
+      "Crap": 20.0
+    },
+    {
+      "Method": "System.Void Intercom.Pairing.LanPeerAudioControlTransport::OnFrame(System.Guid,Intercom.ControlChannel.ControlFrame)",
+      "File": "M:\\Intercom\\src\\Intercom.Core\\Pairing\\LanPairingHost.cs",
+      "Complexity": 8,
+      "Coverage": 0.0,
+      "Crap": 72.0
+    },
+    {
+      "Method": "System.Void Intercom.Pairing.LanPeerChatTransport::OnDelivered(System.Guid,System.Guid)",
+      "File": "M:\\Intercom\\src\\Intercom.Core\\Pairing\\LanPairingHost.cs",
+      "Complexity": 4,
+      "Coverage": 0.0,
+      "Crap": 20.0
+    },
+    {
+      "Method": "System.Void Intercom.Pairing.LanPeerChatTransport::OnDropped(System.Guid)",
+      "File": "M:\\Intercom\\src\\Intercom.Core\\Pairing\\LanPairingHost.cs",
+      "Complexity": 4,
+      "Coverage": 0.0,
+      "Crap": 20.0
+    },
+    {
+      "Method": "System.Void Intercom.Pairing.LanPeerChatTransport::OnFrame(System.Guid,Intercom.ControlChannel.ControlFrame)",
+      "File": "M:\\Intercom\\src\\Intercom.Core\\Pairing\\LanPairingHost.cs",
+      "Complexity": 10,
+      "Coverage": 0.0,
+      "Crap": 110.0
+    }
+  ]
+}

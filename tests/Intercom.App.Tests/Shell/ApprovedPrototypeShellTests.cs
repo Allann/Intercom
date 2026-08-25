@@ -177,6 +177,19 @@ public sealed class ApprovedPrototypeShellTests
         Assert.Contains("x:Name=\"ChatLayoutGrid\"", xaml);
         Assert.Contains("x:Name=\"ChatComposerGrid\" Grid.Row=\"4\"", xaml);
         Assert.Contains("<RowDefinition Height=\"*\"/>", xaml);
+        Assert.DoesNotContain("x:Name=\"ChatScrollViewer\" MinHeight=\"250\" MaxHeight=\"420\"", xaml);
+    }
+
+    [Fact]
+    public void ImagePickerFailures_AreCaughtAndShownInTheChatCard()
+    {
+        var codeBehind = File.ReadAllText(CodeBehindPath);
+        var handlerStart = codeBehind.IndexOf("async void OnChooseChatImage", StringComparison.Ordinal);
+        var handlerEnd = codeBehind.IndexOf("async void OnChatPaste", handlerStart, StringComparison.Ordinal);
+        var handler = codeBehind[handlerStart..handlerEnd];
+
+        Assert.True(handler.IndexOf("try", StringComparison.Ordinal) < handler.IndexOf("new FileOpenPicker", StringComparison.Ordinal));
+        Assert.Contains("ShowChatImageError", handler);
     }
 
     [Fact]

@@ -1,5 +1,7 @@
 ## Agent skills
 
+Use ASD-STE100 Simplified Technical English for all responses
+
 ### Issue tracker
 
 Issues and PRDs are tracked in GitHub Issues for `Allann/Intercom`. See `docs/agents/issue-tracker.md`.

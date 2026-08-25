@@ -1278,24 +1278,38 @@ public sealed partial class MainWindow : Window, IResidentWindow
 
     async void OnChooseChatImage(object sender, RoutedEventArgs e)
     {
-        var picker = new FileOpenPicker();
-        InitializeWithWindow.Initialize(picker, Hwnd);
-        picker.FileTypeFilter.Add(".jpg"); picker.FileTypeFilter.Add(".jpeg"); picker.FileTypeFilter.Add(".png");
-        picker.FileTypeFilter.Add(".gif"); picker.FileTypeFilter.Add(".webp"); picker.FileTypeFilter.Add(".bmp");
-        var file = await picker.PickSingleFileAsync();
-        if (file is null) return;
-        await AttachChatImageAsync(await file.OpenStreamForReadAsync());
+        try
+        {
+            var picker = new FileOpenPicker();
+            InitializeWithWindow.Initialize(picker, Hwnd);
+            picker.FileTypeFilter.Add(".jpg"); picker.FileTypeFilter.Add(".jpeg"); picker.FileTypeFilter.Add(".png");
+            picker.FileTypeFilter.Add(".gif"); picker.FileTypeFilter.Add(".webp"); picker.FileTypeFilter.Add(".bmp");
+            var file = await picker.PickSingleFileAsync();
+            if (file is null) return;
+            await AttachChatImageAsync(await file.OpenStreamForReadAsync());
+        }
+        catch (Exception ex)
+        {
+            ShowChatImageError(ex);
+        }
     }
 
     async void OnChatPaste(object sender, TextControlPasteEventArgs e)
     {
-        var data = Clipboard.GetContent();
-        if (!data.Contains(StandardDataFormats.Bitmap)) return;
-        e.Handled = true;
-        if (_pendingChatImage is not null) return;
-        var reference = await data.GetBitmapAsync();
-        using var source = await reference.OpenReadAsync();
-        await AttachChatImageAsync(source.AsStreamForRead());
+        try
+        {
+            var data = Clipboard.GetContent();
+            if (!data.Contains(StandardDataFormats.Bitmap)) return;
+            e.Handled = true;
+            if (_pendingChatImage is not null) return;
+            var reference = await data.GetBitmapAsync();
+            using var source = await reference.OpenReadAsync();
+            await AttachChatImageAsync(source.AsStreamForRead());
+        }
+        catch (Exception ex)
+        {
+            ShowChatImageError(ex);
+        }
     }
 
     void OnChatDragOver(object sender, DragEventArgs e)
@@ -1307,9 +1321,16 @@ public sealed partial class MainWindow : Window, IResidentWindow
     async void OnChatDrop(object sender, DragEventArgs e)
     {
         if (_pendingChatImage is not null || !e.DataView.Contains(StandardDataFormats.StorageItems)) return;
-        var file = (await e.DataView.GetStorageItemsAsync()).OfType<StorageFile>().FirstOrDefault();
-        if (file is null) return;
-        try { await AttachChatImageAsync(await file.OpenStreamForReadAsync()); } catch { }
+        try
+        {
+            var file = (await e.DataView.GetStorageItemsAsync()).OfType<StorageFile>().FirstOrDefault();
+            if (file is null) return;
+            await AttachChatImageAsync(await file.OpenStreamForReadAsync());
+        }
+        catch (Exception ex)
+        {
+            ShowChatImageError(ex);
+        }
     }
 
     async Task AttachChatImageAsync(Stream source)
@@ -1326,12 +1347,17 @@ public sealed partial class MainWindow : Window, IResidentWindow
         }
         catch (Exception ex)
         {
-            DiagnosticLog.Current.Error("chat.image-prepare-failed", "Image attachment preparation failed.", ex);
-            ClearPendingChatImage();
-            ChatChimeNotice.Text = "Image could not be prepared";
-            ShowChatChime();
+            ShowChatImageError(ex);
         }
         finally { source.Dispose(); UpdateMessagingEnabled(); }
+    }
+
+    void ShowChatImageError(Exception ex)
+    {
+        DiagnosticLog.Current.Error("chat.image-prepare-failed", "Image attachment preparation failed.", ex);
+        ClearPendingChatImage();
+        ChatChimeNotice.Text = "Image could not be prepared";
+        ShowChatChime();
     }
 
     void OnRemoveChatAttachment(object sender, RoutedEventArgs e) => ClearPendingChatImage();

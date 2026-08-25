@@ -151,7 +151,7 @@
                                             <CheckBox x:Name="SpokenChatCheckBox" Content="Read incoming messages aloud" Checked="OnSpokenChatToggled" Unchecked="OnSpokenChatToggled"/>
                                             <TextBlock x:Name="ChatChimeNotice" Text="🔔 New message" FontSize="11" FontWeight="Bold" Foreground="#FFB6502F" Visibility="Collapsed"/>
                                         </StackPanel>
-                                        <ScrollViewer Grid.Row="3" x:Name="ChatScrollViewer" MinHeight="250" MaxHeight="420"><StackPanel x:Name="ChatMessagesPanel" Spacing="6"/></ScrollViewer>
+                                        <ScrollViewer Grid.Row="3" x:Name="ChatScrollViewer" MinHeight="250" VerticalAlignment="Stretch"><StackPanel x:Name="ChatMessagesPanel" Spacing="6"/></ScrollViewer>
                                         <Grid x:Name="ChatComposerGrid" Grid.Row="4" RowSpacing="4">
                                             <Grid.RowDefinitions><RowDefinition Height="Auto"/><RowDefinition Height="Auto"/><RowDefinition Height="Auto"/><RowDefinition Height="Auto"/></Grid.RowDefinitions>
                                             <TextBlock Grid.Row="0" x:Name="ChatTypingText" Text="Typing…" FontSize="10" FontStyle="Italic" Visibility="Collapsed"/>
